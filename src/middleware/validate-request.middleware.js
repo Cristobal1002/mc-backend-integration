@@ -1,22 +1,35 @@
 import { validationResult } from 'express-validator';
-import {RequestValidationError} from "../errors/index.js";
+import { RequestValidationError } from "../errors/index.js";
 
 export const validateRequest = (req, _, next) => {
-    console.log("validateRequest");
+    //console.log("[VALIDATION] Validando la solicitud...");
+
     const errors = validationResult(req);
 
     if (!errors.isEmpty()) {
-        let _errors = [];
-        for (const e of errors.array()) {
+        const formattedErrors = errors.array().map((e) => {
             if (e.nestedErrors) {
-                _errors = [..._errors, ...e.nestedErrors];
+                return e.nestedErrors.map((nestedError) => ({
+                    msg: nestedError.msg,
+                    path: nestedError.param,
+                    location: nestedError.location,
+                    value: nestedError.value,
+                }));
             } else {
-                _errors.push(e);
+                return {
+                    msg: e.msg,
+                    path: e.param,
+                    location: e.location,
+                    value: e.value,
+                };
             }
-        }
+        }).flat();  // Aplana los errores anidados, si existen
 
-        //console.log(_errors)
-        return next(RequestValidationError(_errors));
+       console.log("[VALIDATION] Errores detectados:", formattedErrors);
+
+        // Lanza un error de validación personalizado
+        return next(new RequestValidationError(formattedErrors));  // Lanza la instancia directamente
     }
-    next();
+
+    next();  // Si no hay errores, pasa al siguiente middleware
 };
