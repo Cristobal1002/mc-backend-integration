@@ -1,11 +1,14 @@
 import axios from "axios";
-import { CustomError } from "../errors/index.js";
+import {CustomError, handleServiceError} from "../errors/index.js";
 import xml2js from "xml2js";
 
 
 // Configuración inicial y constantes
 const BASE_URL = 'https://cloudlicense.icg.eu/services/cloud/getCustomerWithAuthToken';
 const PURCHASE_EXPORTATION_ID = '5f99f429-ac34-11ef-8dd7-00505608b026';
+const VENDOR_EXPORTATION_ID = '30df5e30-bd78-11ef-8dd7-00505608b026';
+const CUSTOMER_EXPORTATION_ID = '8c922a40-d777-11ee-93dc-0050561d75a2';
+const SALES_EXPORTATION_ID = 'd9e187fe-dfe8-11ee-954d-0050561429ba'
 
 // Utilidades generales
 
@@ -13,14 +16,19 @@ const PURCHASE_EXPORTATION_ID = '5f99f429-ac34-11ef-8dd7-00505608b026';
  * Limpia un JSON inválido en formato string.
  */
 const cleanInvalidJSON = (jsonString) => {
-    return jsonString
-        .replace(/:\s*,/g, ': null,') // Reemplaza valores vacíos ": ," por ": null"
-        .replace(/,(\s*[}\]])/g, '$1') // Elimina comas sobrantes antes de un cierre
-        .replace(/([{[])\s*,/g, '$1') // Elimina comas al inicio de objetos o arreglos
-        .replace(/"(\w+)"\s*:\s*([\d,]+\.\d+)/g, (match, key, value) => {
-            const cleanValue = value.replace(/,/g, ''); // Limpia comas en números
-            return `"${key}": ${cleanValue}`;
-        });
+    try {
+        return jsonString
+            .replace(/:\s*,/g, ': null,') // Reemplaza valores vacíos ": ," por ": null"
+            .replace(/,(\s*[}\]])/g, '$1') // Elimina comas sobrantes antes de un cierre
+            .replace(/([{[])\s*,/g, '$1') // Elimina comas al inicio de objetos o arreglos
+            .replace(/"(\w+)"\s*:\s*([\d,]+\.\d+)/g, (match, key, value) => {
+                const cleanValue = value.replace(/,/g, ''); // Limpia comas en números
+                return `"${key}": ${cleanValue}`;
+            });
+    } catch (error) {
+        console.error('Error al limpiar JSON:', error.message);
+        throw new Error('Error en la limpieza del JSON');
+    }
 };
 
 /**
@@ -28,12 +36,20 @@ const cleanInvalidJSON = (jsonString) => {
  */
 const parseBase64Response = (base64Data) => {
     try {
+        // Decodifica la data desde Base64
         const decodedData = Buffer.from(base64Data, 'base64').toString('utf-8');
+
+        // Valida si contiene caracteres no válidos
+        if (/\\uFFFD/.test(decodedData)) {
+            console.warn('Advertencia: La respuesta contiene caracteres no válidos.');
+        }
+
+        // Limpia y convierte la cadena a JSON
         const cleanedData = cleanInvalidJSON(decodedData);
         return JSON.parse(cleanedData);
     } catch (error) {
-        console.error('Error al decodificar o parsear respuesta:', error.message);
-        throw new Error('Respuesta inválida: no se pudo procesar');
+        console.error('Error al procesar la respuesta Base64:', error.message);
+        throw new Error('Respuesta inválida: no se pudo procesar.');
     }
 };
 
@@ -50,7 +66,7 @@ const getHeaders = (authToken) => ({
  * Obtiene el token de Hiopos usando credenciales de ambiente.
  * También devuelve la dirección base proporcionada por el servicio.
  */
-export const getHioposToken = async () => {
+const getHioposToken = async () => {
     const email = process.env.HIOPOS_EMAIL;
     const password = process.env.HIOPOS_PASSWORD;
 
@@ -81,20 +97,7 @@ export const getHioposToken = async () => {
         return customerWithAuthTokenResponse;
     } catch (error) {
         console.error("Error en servicio (getHioposToken):", error);
-
-        if (error.response) {
-            throw new CustomError({
-                message: error.response.data?.message || "Error de comunicación con el servidor",
-                code: error.response.status || 500,
-                data: error.response.data,
-            });
-        }
-
-        throw new CustomError({
-            message: error.message || "Ocurrió un error desconocido",
-            code: 500,
-            data: error,
-        });
+        handleServiceError(error);
     }
 };
 
@@ -120,22 +123,45 @@ export const getPurchaseInvoices = async (filter) => {
         }
 
         const parsedData = parseBase64Response(base64Data);
-        return { data: parsedData };
+        return {  data: {json:parsedData, base:base64Data} };
     } catch (error) {
         console.error("Error en servicio (getPurchaseInvoices):", error);
-
-        if (error.response) {
-            throw new CustomError({
-                message: error.response.data?.message || "Error al obtener facturas de compra",
-                code: error.response.status || 500,
-                data: error.response.data,
-            });
-        }
-
-        throw new CustomError({
-            message: error.message || "Ocurrió un error desconocido",
-            code: 500,
-            data: error,
-        });
+        handleServiceError(error)
     }
 };
+
+export const getBridgeDataByType = async (servicio, filter) => {
+    try {
+        let exportationId = ''
+        const connectionData = await getHioposToken();
+        const { authToken, address } = connectionData;
+        const headers = getHeaders(authToken);
+        const url = `https://${address}/ErpCloud/exportation/launch`;
+        switch (servicio) {
+            case '/purchases': exportationId = PURCHASE_EXPORTATION_ID
+                break;
+            case '/vendors': exportationId = VENDOR_EXPORTATION_ID
+                break;
+            case '/customers': exportationId = CUSTOMER_EXPORTATION_ID
+                break;
+            case '/sales': exportationId = SALES_EXPORTATION_ID
+                break;
+        }
+        filter.exportationId = exportationId
+        console.log("DATA EN SERVICIO", filter)
+        const response = await axios.post(url, filter, headers);
+        console.log('Respuesta en servicio',response)
+        const base64Data = response.data[0]?.exportedDocs[0]?.data;
+
+        if (!base64Data) {
+            return {data:[]}
+        }
+
+        const parsedData = parseBase64Response(base64Data);
+        return { data:parsedData };
+
+    } catch (error) {
+        console.error("Error en servicio (getPurchaseInvoices):", error);
+        handleServiceError(error)
+    }
+}
