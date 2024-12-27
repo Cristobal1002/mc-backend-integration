@@ -1,6 +1,7 @@
 import axios from "axios";
 import {CustomError, handleServiceError} from "../errors/index.js";
 import xml2js from "xml2js";
+import JSON5 from 'json5'
 
 
 // Configuración inicial y constantes
@@ -18,11 +19,12 @@ const SALES_EXPORTATION_ID = 'd9e187fe-dfe8-11ee-954d-0050561429ba'
 const cleanInvalidJSON = (jsonString) => {
     try {
         return jsonString
-            .replace(/:\s*,/g, ': null,') // Reemplaza valores vacíos ": ," por ": null"
+            .replace(/:\s*,/g, ': "",') // Reemplaza valores vacíos ": ," por ": null"
             .replace(/,(\s*[}\]])/g, '$1') // Elimina comas sobrantes antes de un cierre
             .replace(/([{[])\s*,/g, '$1') // Elimina comas al inicio de objetos o arreglos
-            .replace(/"(\w+)"\s*:\s*([\d,]+\.\d+)/g, (match, key, value) => {
-                const cleanValue = value.replace(/,/g, ''); // Limpia comas en números
+            .replace(/[\x00-\x1F\x80-\xFF]/g, '') // Eliminar caracteres no imprimibles
+            .replace(/"(\w+)"\s*:\s*(-?\d{1,3}(?:,\d{3})*\.\d+)/g, (match, key, value) => {
+                const cleanValue = value.replace(/,/g, '');
                 return `"${key}": ${cleanValue}`;
             });
     } catch (error) {
@@ -44,12 +46,13 @@ const parseBase64Response = (base64Data) => {
             console.warn('Advertencia: La respuesta contiene caracteres no válidos.');
         }
 
-        // Limpia y convierte la cadena a JSON
         const cleanedData = cleanInvalidJSON(decodedData);
-        return JSON.parse(cleanedData);
+
+        return JSON5.parse(cleanedData);
+
     } catch (error) {
         console.error('Error al procesar la respuesta Base64:', error.message);
-        throw new Error('Respuesta inválida: no se pudo procesar.');
+        throw new CustomError({message:`Error al procesar la respuesta Base64, ${error.message}`,code: 500, data:{error}});
     }
 };
 
@@ -78,9 +81,11 @@ const getHioposToken = async () => {
         const jsonResponse = await parser.parseStringPromise(response.data);
 
         if (jsonResponse.response.serverError) {
+            console.log('JSON repsonse', jsonResponse.response)
             throw new CustomError({
-                message: jsonResponse.response.serverError,
-                code: 500,
+                message:jsonResponse.response.serverError.message || null,
+                code: 401,
+                data: jsonResponse.response
             });
         }
 
@@ -104,31 +109,6 @@ const getHioposToken = async () => {
 /**
  * Obtiene las facturas de compra en base a un filtro.
  */
-export const getPurchaseInvoices = async (filter) => {
-    try {
-        const connectionData = await getHioposToken();
-        const { authToken, address } = connectionData;
-        const headers = getHeaders(authToken);
-        const url = `https://${address}/ErpCloud/exportation/launch`;
-        const requestData = { startDate: filter.startDate, endDate: filter.endDate, exportationId: PURCHASE_EXPORTATION_ID };
-
-        const response = await axios.post(url, requestData, headers);
-        const base64Data = response.data[0]?.exportedDocs[0]?.data;
-
-        if (!base64Data) {
-            throw new CustomError({
-                message: "No se encontró información en la respuesta",
-                code: 404,
-            });
-        }
-
-        const parsedData = parseBase64Response(base64Data);
-        return {  data: {json:parsedData, base:base64Data} };
-    } catch (error) {
-        console.error("Error en servicio (getPurchaseInvoices):", error);
-        handleServiceError(error)
-    }
-};
 
 export const getBridgeDataByType = async (servicio, filter) => {
     try {
@@ -158,10 +138,10 @@ export const getBridgeDataByType = async (servicio, filter) => {
         }
 
         const parsedData = parseBase64Response(base64Data);
-        return { data:parsedData };
+        return { data:{data:parsedData, base:base64Data} };
 
     } catch (error) {
-        console.error("Error en servicio (getPurchaseInvoices):", error);
+        console.log("Error en servicio (getBridgeDataByType):", error);
         handleServiceError(error)
     }
 }

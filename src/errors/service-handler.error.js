@@ -1,13 +1,13 @@
 import {CustomError} from "./index.js"
 
 export const handleServiceError = (error) => {
-    console.error("Error en servicio:", error.message);
+    console.error("Error en servicio:", error);
 
-    if (error.response) {
+    if (error) {
         throw new CustomError({
-            message: error.response.data?.message || "Error en el servidor",
-            code: error.response.status || 500,
-            data: error.response.data,
+            message:error.message || error.response.data?.message || "Error en el servidor",
+            code:  error.response?.status || error.code || 500,
+            data: error.data || error.response.data,
         });
     }
 

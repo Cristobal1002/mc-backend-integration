@@ -135,6 +135,20 @@ export const createSiigoItem = async (item) => {
             name: item.Articulo,
             stock_control: false,
             active: true,
+            unit_label: UnidadMedida,
+            taxes:[],
+            prices: [
+                {
+                    currency_code: 'COP',
+                    price_list: [
+                        {
+                            "position": 1,
+                            "value": item.Precio
+                        }
+                    ]
+                }
+            ]
+
 
         }
     } catch (error) {
