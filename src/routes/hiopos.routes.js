@@ -10,3 +10,4 @@ hiopos.post(`/purchases`, hioposValidator.purchaseBody, validateRequestMiddlewar
 hiopos.post(`/vendors`, hioposValidator.vendorBody, validateRequestMiddleware.validateRequest,  hioposController.getHioposData)
 hiopos.post(`/customers`,  hioposController.getHioposData)
 hiopos.post(`/sales`, hioposController.getHioposData)
+hiopos.post(`/items`, hioposController.getHioposData)

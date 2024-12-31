@@ -5,11 +5,12 @@ import JSON5 from 'json5'
 
 
 // Configuración inicial y constantes
-const BASE_URL = 'https://cloudlicense.icg.eu/services/cloud/getCustomerWithAuthToken';
-const PURCHASE_EXPORTATION_ID = '5f99f429-ac34-11ef-8dd7-00505608b026';
-const VENDOR_EXPORTATION_ID = '30df5e30-bd78-11ef-8dd7-00505608b026';
-const CUSTOMER_EXPORTATION_ID = '8c922a40-d777-11ee-93dc-0050561d75a2';
-const SALES_EXPORTATION_ID = 'd9e187fe-dfe8-11ee-954d-0050561429ba'
+const BASE_URL = process.env.HIOPOS_BASE_URL
+const PURCHASE_EXPORTATION_ID = process.env.HIOPOS_PURCHASE_EXPORTATION_ID
+const VENDOR_EXPORTATION_ID = process.env.HIOPOS_VENDOR_EXPORTATION_ID
+const CUSTOMER_EXPORTATION_ID = process.env.HIOPOS_CUSTOMER_EXPORTATION_ID
+const SALES_EXPORTATION_ID = process.env.HIOPOS_SALES_EXPORTATION_ID
+const ITEMS_EXPORTATION_ID = process.env.HIOPOS_ITEMS_EXPORTATION_ID
 
 // Utilidades generales
 
@@ -126,6 +127,8 @@ export const getBridgeDataByType = async (servicio, filter) => {
                 break;
             case '/sales': exportationId = SALES_EXPORTATION_ID
                 break;
+            case '/items': exportationId = ITEMS_EXPORTATION_ID
+                break;
         }
         filter.exportationId = exportationId
         console.log("DATA EN SERVICIO", filter)
@@ -138,7 +141,7 @@ export const getBridgeDataByType = async (servicio, filter) => {
         }
 
         const parsedData = parseBase64Response(base64Data);
-        return { data:{data:parsedData, base:base64Data} };
+        return {data: parsedData} ;
 
     } catch (error) {
         console.log("Error en servicio (getBridgeDataByType):", error);
