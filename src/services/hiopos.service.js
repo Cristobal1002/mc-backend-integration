@@ -119,16 +119,25 @@ export const getBridgeDataByType = async (servicio, filter) => {
         const headers = getHeaders(authToken);
         const url = `https://${address}/ErpCloud/exportation/launch`;
         switch (servicio) {
-            case '/purchases': exportationId = PURCHASE_EXPORTATION_ID
+            case '/purchases':
+            case 'purchases':
+                exportationId = PURCHASE_EXPORTATION_ID;
                 break;
-            case '/vendors': exportationId = VENDOR_EXPORTATION_ID
+            case '/vendors':
+                exportationId = VENDOR_EXPORTATION_ID;
                 break;
-            case '/customers': exportationId = CUSTOMER_EXPORTATION_ID
+            case '/customers':
+                exportationId = CUSTOMER_EXPORTATION_ID;
                 break;
-            case '/sales': exportationId = SALES_EXPORTATION_ID
+            case '/sales':
+            case 'sales':
+                exportationId = SALES_EXPORTATION_ID;
                 break;
-            case '/items': exportationId = ITEMS_EXPORTATION_ID
+            case '/items':
+                exportationId = ITEMS_EXPORTATION_ID;
                 break;
+            default:
+                throw new Error(`Servicio no reconocido: ${servicio}`);
         }
         filter.exportationId = exportationId
         console.log("DATA EN SERVICIO", filter)

@@ -65,34 +65,37 @@ export const getItemByCode = async (code) => {
     }
 }
 
-const setSiigoPurchaseInvoiceData = async (data) => {
-    try {
-        const items = await setSiigoPurchaseItems(data.DetalleDocumento)
-        return {
-            document: {
-                id: process.env.SIIGO_PURCHASE_ID
-            },
-            date: DateTime.now().toISODate(),
-            supplier: {
-                identification: data.DetalleProveedor.Nif
-            },
-            cost_center: data.CodAlmacen,
-            provider_invoice: {
-                prefix: '',
-                number: data.SudocProv
-            },
-            observations: `Factura de oringen hiopos # ${data.Serie}/${data.Numero}`,
-            items:[
-                {
+export const setSiigoPurchaseInvoiceData = async (data) => {
 
-                }
-            ],
-            payments:[]
+    return data.map(invoice => ({
+        date: DateTime.now().toISODate(),
+        document: {
+            id: process.env.SIIGO_PURCHASE_ID
+        },
+        supplier: {
+            identification: data.DetalleProveedor.Nif
+        },
+        cost_center: data.Almacen,
+        provider_invoice: {
+            prefix: '',
+            number: data.SudocProv
+        },
+        observations: `Factura de oringen hiopos # ${data.Serie}/${data.Numero}`,
+        items: invoice.DetalleDocumento.map(item => ({
+            code: item.RefArticulo,
+            description: item.RefArticulo,
+            quantity: item.Unidades,
+            price: item.Precio,
+            taxes: item.DetalleImpuesto.map(tax => ({
+                id: tax.NombreImpuesto
+            })),
+            payments: invoice.DetalleMediosdepago.map(payment => ({
+                id: payment.MedioPago,
+                value:payment.Importe
+            }))
+        }))
+    }))
 
-        }
-    } catch (error) {
-
-    }
 }
 
 const setSiigoPurchaseItems = async (data) => {

@@ -1,6 +1,6 @@
 import Redis from "ioredis";
 
-const redis = new Redis({
+const redisConfig = new Redis({
     host: process.env.REDIS_HOST,     // Endpoint de ElastiCache
     port: process.env.REDIS_PORT || 6379,
     password: process.env.REDIS_PASSWORD, // Contraseña configurada en ElastiCache
@@ -15,13 +15,13 @@ const redis = new Redis({
     }
 })
 
-redis.on("connect", () => {
+redisConfig.on("connect", () => {
     console.log("Redis conectado exitosamente");
 });
 
-redis.on("error", (err) => {
+redisConfig.on("error", (err) => {
     console.error("Error de Redis:", err);
 });
 
-export default redis;
+export default redisConfig;
 

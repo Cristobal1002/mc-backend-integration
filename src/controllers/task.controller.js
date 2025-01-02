@@ -1,4 +1,4 @@
-import {taskQueue} from "../config/bullmq.js";
+import {taskQueue} from "../config/bullmq.config.js";
 export const addTask = async (req, res, next) => {
     const {name, data} = req.body;
     try {
