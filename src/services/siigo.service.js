@@ -7,50 +7,117 @@ const SIIGO_SERVICES_BASE_URL= 'https://services.siigo.com'
 const SIIGO_USER = process.env.SIIGO_USER
 const SIIGO_TOKEN = process.env.SIIGO_TOKEN
 const PARTNER = process.env.SIIGO_PARTNER
-const getSiigoToken = async() => {
-    try {
-        const url = `${SIIGO_BASE_URL}/auth`
-        const response = await axios.post(url, {username: SIIGO_USER, access_key: SIIGO_TOKEN})
-        if (!response.data.access_token) {
-            throw new CustomError({message:'Acceso denegado a la API de Siigo',code: 401})
-        }
-        return response.data.access_token;
-    } catch (error) {
-        console.error(error)
-        handleServiceError(error)
-    }
-}
 
-const getSiigoHeadersOptions = async() => {
+// Obtener token desde cache en memoria o generar uno nuevo
+let cachedSiigoToken = null;
+let tokenExpirationTime = null;
+let isFetchingToken = false; // Variable para manejar el bloqueo
+let tokenPromise = null; // Promesa compartida durante la obtención del token
+
+// Obtener token desde cache en memoria o generar uno nuevo
+export const getSiigoToken = async () => {
+    const now = Date.now();
+
+    // Si ya existe un token válido en caché, devolverlo
+    if (cachedSiigoToken && now < tokenExpirationTime) {
+        console.log('Token de Siigo obtenido desde cache');
+        return cachedSiigoToken;
+    }
+
+    // Si ya hay otra solicitud generando el token, esperar su promesa
+    if (isFetchingToken) {
+        console.log('Esperando a que se genere el token...');
+        return tokenPromise;
+    }
+
+    // Si no hay un token válido ni se está generando, iniciar la generación
+    isFetchingToken = true;
+
+    tokenPromise = new Promise(async (resolve, reject) => {
+        try {
+            const url = `${SIIGO_BASE_URL}/auth`;
+            const response = await axios.post(url, { username: SIIGO_USER, access_key: SIIGO_TOKEN });
+
+            if (!response.data.access_token) {
+                throw new CustomError({ message: 'Acceso denegado a la API de Siigo', code: 401 });
+            }
+
+            // Almacenar el token y su tiempo de expiración (1 hora)
+            cachedSiigoToken = response.data.access_token;
+            tokenExpirationTime = now + 60 * 60 * 1000;
+
+            console.log('Token de Siigo guardado en memoria');
+            resolve(cachedSiigoToken);
+        } catch (error) {
+            console.error('Error obteniendo el token de Siigo:', error.message);
+            reject(error);
+        } finally {
+            isFetchingToken = false;
+            tokenPromise = null; // Restablecer la promesa
+        }
+    });
+
+    return tokenPromise;
+};
+
+export const getSiigoHeadersOptions = async () => {
     try {
         const token = await getSiigoToken();
-        return  {
+        return {
             headers: {
                 'content-type': 'application/json',
-                Authorization: token,
+                Authorization: `Bearer ${token}`,
                 'Partner-Id': PARTNER,
             },
-        }
+        };
     } catch (error) {
-        console.error('Error al limpiar JSON:', error.message);
+        console.error('Error al obtener encabezados de Siigo:', error.message);
         throw new Error('Error armando los encabezados');
     }
-}
+};
+
 
 //"identification": "1000019555"
 export const getContactsByIdentification = async (identification) => {
     try {
-        const options = await   getSiigoHeadersOptions()
-        const url = `${SIIGO_BASE_URL}/v1/customers?identification=${identification}`
-        const response = await axios.get(url,options)
-        console.log('Respuesta en contactos:', response.data)
-        return {data: response.data.results}
-    } catch (error) {
-        console.error(error)
-        handleServiceError(error)
-    }
-}
+        // Limpiar caracteres no numéricos
+        const cleanIdentification = identification.replace(/[.,-]/g, '');
 
+        // Detectar si es "consumidor final"
+        const countTwos = (cleanIdentification.match(/2/g) || []).length;
+        if (countTwos > 5) {
+            return await querySiigoContact('222222222222'); // Consumidor final
+        }
+
+        // Intentar la consulta con 10 y 9 dígitos
+        const contact10Digits = await querySiigoContact(cleanIdentification);
+        if (contact10Digits) return contact10Digits;
+
+        // Si no hay resultados con 10 dígitos, probar con 9 dígitos
+        const contact9Digits = await querySiigoContact(cleanIdentification.slice(0, -1));
+        return contact9Digits || null; // Retornar null si no hay resultados
+    } catch (error) {
+        console.error('Error en getContactsByIdentification:', error);
+        handleServiceError(error);
+        return null; // Retornar null en caso de error
+    }
+};
+
+// Función auxiliar para consultas individuales
+const querySiigoContact = async (identification) => {
+    try {
+        const options = await getSiigoHeadersOptions();
+        const url = `${SIIGO_BASE_URL}/v1/customers?identification=${identification}`;
+        console.log('Consultando URL:', url);
+        const response = await axios.get(url, options);
+        return response.data.results.length > 0 ? response.data : null;
+    } catch (error) {
+        if (error.response?.status === 404) {
+            return null; // Retornar null si no se encuentra el recurso
+        }
+        throw error; // Relanzar otros errores
+    }
+};
 //"code": "MPP13"
 export const getItemByCode = async (code) => {
     try {
@@ -66,19 +133,19 @@ export const getItemByCode = async (code) => {
 }
 
 export const setSiigoPurchaseInvoiceData = async (data) => {
-
+console.log('[FACTURAS DE COMPRA]', data)
     return data.map(invoice => ({
         date: DateTime.now().toISODate(),
         document: {
             id: process.env.SIIGO_PURCHASE_ID
         },
         supplier: {
-            identification: data.DetalleProveedor.Nif
+            identification: invoice.DetalleProveedor.Nif
         },
-        cost_center: data.Almacen,
+        cost_center: invoice.Almacen,
         provider_invoice: {
             prefix: '',
-            number: data.SudocProv
+            number: invoice.SudocProv
         },
         observations: `Factura de oringen hiopos # ${data.Serie}/${data.Numero}`,
         items: invoice.DetalleDocumento.map(item => ({
@@ -96,6 +163,29 @@ export const setSiigoPurchaseInvoiceData = async (data) => {
         }))
     }))
 
+}
+
+export const setSiigoSalesInvoiceData = async (data) => {
+    return data.map(invoice => ({
+        date: DateTime.now().toISODate(),
+        document: {
+            id: process.env.SIIGO_SALES_ID
+        },
+        customer: {
+            identification: invoice.DatosCliente.Nif
+        },
+        items: invoice.DetalleDocumento.map(item => ({
+            code: item.RefArticulo,
+            quantity: item.Unidades,
+            price: item.Precio,
+            discount: item. Descuento
+        })),
+        payments: invoice.MedioPago.map(payment => ({
+            id: payment.MedioDePago,
+            value: payment.Valor
+        })),
+        observations: `Integrado automaticamente, documento Hiopos: ${invoice.Serie}/${invoice.Numero}`
+    }))
 }
 
 const setSiigoPurchaseItems = async (data) => {
@@ -156,5 +246,86 @@ export const createSiigoItem = async (item) => {
         }
     } catch (error) {
         
+    }
+}
+
+export const setCustomerContactData = (type, contact) => {
+
+    const siigoType = 'Customer'
+    const person_type = contact[0].TipoDocumentoFiscal === 'NIT' ? 'Company' : 'Person';
+    const id_type = person_type === 'Person'? 13 : 31;
+    const cleanedNif = contact[0].Nif.replace(/[.,-]/g, '');
+    const identification = personType === 'Company'? cleanedNif.slice(0, 9) : cleanedNif;
+
+
+
+}
+
+export const setVendorContactData = (contact) => {
+    const supplier = contact[0]
+    const isCompany = supplier.Tipo_Documento_Fiscal === "NIT";
+    const person_type = supplier.Tipo_Documento_Fiscal === 'NIT' ? 'Company' : 'Person';
+    const cleanedNif = supplier.Numero_De_Documento_Fiscal.replace(/[.,-]/g, '');
+    const identification = person_type === 'Company'? cleanedNif.slice(0, 9) : cleanedNif;
+
+    return {
+        type: 'Supplier',
+        person_type,
+        id_type: isCompany ? "31" : "13",
+        identification,
+        name: formatSiigoName(isCompany ? "Company" : "Person", supplier.Proveedor),
+        commercial_name: supplier.Nombre_Comercial || supplier.Proveedor,
+        phone: supplier.Telefono,
+        email: supplier.Email,
+        /*address: {
+            address: supplier.Direccion,
+            city: {
+                code: supplier.Codigo_Postal.toString(),
+                name: supplier.Poblacion_Ciudad || "Unknown"
+            }
+        },*/
+        comments: supplier.Observaciones || "",
+    };
+}
+
+const formatSiigoName = (type, fullName) => {
+    if (type === "Company") {
+        // Empresas: solo enviamos el nombre completo como un solo elemento en el array
+        return [fullName];
+    }
+
+    if (type === "Person") {
+        // Dividimos el nombre completo en palabras
+        const nameParts = fullName.trim().split(/\s+/);
+
+        // Evaluamos casos según la cantidad de palabras
+        switch (nameParts.length) {
+            case 1: // Solo un nombre
+                return [nameParts[0], "Apellido_No_Asignado"];
+            case 2: // Un nombre y un apellido
+                return [nameParts[0], nameParts[1]];
+            case 3: // Dos nombres y un apellido, o un nombre y dos apellidos
+                return [nameParts[0], `${nameParts[1]} ${nameParts[2]}`];
+            case 4: // Dos nombres y dos apellidos
+            default:
+                return [`${nameParts[0]} ${nameParts[1]}`, `${nameParts[2]} ${nameParts[3]}`];
+        }
+    }
+
+    throw new Error("Tipo desconocido para el campo name");
+};
+
+export const createContact = async (type, contact) => {
+    const options = await getSiigoHeadersOptions()
+    const url = `${SIIGO_BASE_URL}/v1/customers`
+    try {
+        if (type === '/vendors'){
+            const data = setVendorContactData(contact)
+            const supplier = await axios.post(url, data, options)
+            return supplier.data
+        }
+    } catch (error) {
+        console.log('Error creando el proveedor en siigo', error.response.data)
+        handleServiceError(error)
     }
 }

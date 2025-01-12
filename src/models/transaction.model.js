@@ -5,11 +5,12 @@ class TransactionModel extends Model{}
 
 TransactionModel.init({
     id:{
-        type: DataTypes.UUID,
+        type: DataTypes.UUID, // Tipo UUID
+        defaultValue: DataTypes.UUIDV4, // Genera automáticamente un UUID v4
         primaryKey: true
     },
     type: {
-        type: DataTypes.ENUM('purchase', 'sale'),
+        type: DataTypes.ENUM('purchases', 'sales'),
         allowNull: false
     },
     document_number: {
@@ -24,12 +25,26 @@ TransactionModel.init({
         type: DataTypes.JSONB,
         allowNull: true
     },
+    vendor_validator: {
+        type: DataTypes.ENUM('created', 'exist', 'error', 'validation'),
+        allowNull: false,
+        defaultValue: 'validation'
+    },
+    items_validator: {
+        type: DataTypes.ENUM('created', 'exist', 'error', 'validation'),
+        allowNull: false,
+        defaultValue: 'validation'
+    },
     siigo_response: {
         type: DataTypes.JSONB,
         allowNull: true
     },
+    error: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
     status: {
-        type: DataTypes.ENUM('success', 'failed', 'start', 'in-process')
+        type: DataTypes.ENUM('success', 'failed', 'validation', 'validated')
     }
 },{
     sequelize,
