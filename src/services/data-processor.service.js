@@ -98,6 +98,7 @@ export const purchaseValidator = async () => {
         const validationInfo = await getValidationRegisterData('purchases');
         for (const invoice of validationInfo) {
             const { identification } = invoice.core_data.supplier
+            const {DetalleDocumento} = invoice.hiopos_data
 
             //Se valida el proveedor o se crea
             const getSiigoContact = await siigoService.getContactsByIdentification(identification)
@@ -118,7 +119,45 @@ export const purchaseValidator = async () => {
             }
 
             // Se validan los articulos o se crean
-            const validateItems = await siigoService
+            const itemsValidator = []; // Arreglo para almacenar el estado de cada artículo
+
+            // Se validan los articulos o se crean
+            const itemsValidationResults = []; // Arreglo para almacenar los resultados de los artículos
+            for (const item of DetalleDocumento) {
+                const getSiigoItem = await siigoService.getItemByCode(item.RefArticulo);
+                let validationResult = {
+                    item: item.RefArticulo,
+                    status: '',
+                    details: []
+                };
+
+                if (!getSiigoItem || getSiigoItem.results.length === 0) {
+                    console.log('No existe el articulo:', item);
+
+                    try {
+                        const createItem = await siigoService.createSiigoItem(item);
+                        validationResult.status = 'created';
+                        validationResult.details.push(createItem.details); // Guarda la respuesta de creación
+                    } catch (createError) {
+                        console.error('Error al crear artículo:', createError);
+                        validationResult.status = 'error';
+                        validationResult.details.push({ error: createError.data.Errors || createError.message });
+                    }
+                } else {
+                    console.log('Articulo encontrado:', getSiigoItem.results);
+                    validationResult.status = 'exist';
+                    validationResult.details.push(getSiigoItem.results[0].id); // Almacena el artículo encontrado
+                }
+
+                itemsValidationResults.push(validationResult); // Agrega el resultado al arreglo
+            }
+
+            // Actualiza el campo items_validator con el arreglo de resultados
+            await model.TransactionModel.update({
+                items_validator: itemsValidationResults // Aquí pasamos el arreglo directamente
+            }, {
+                where: { id: invoice.id }
+            });
         }
     } catch (error) {
         throw error

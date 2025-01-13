@@ -13,6 +13,7 @@ let cachedSiigoToken = null;
 let tokenExpirationTime = null;
 let isFetchingToken = false; // Variable para manejar el bloqueo
 let tokenPromise = null; // Promesa compartida durante la obtención del token
+let taxCache = []; //Cache para no consultar siempre los impuestos
 
 // Obtener token desde cache en memoria o generar uno nuevo
 export const getSiigoToken = async () => {
@@ -124,13 +125,13 @@ export const getItemByCode = async (code) => {
         const options = await   getSiigoHeadersOptions()
         const url = `${SIIGO_BASE_URL}/v1/products?code=${code}`
         const response = await axios.get(url,options)
-        console.log('Respuesta en contactos:', response.data)
-        return {data: response.data.results}
+        return response.data
     } catch (error) {
         console.error(error)
         handleServiceError(error)
     }
 }
+
 
 export const setSiigoPurchaseInvoiceData = async (data) => {
 console.log('[FACTURAS DE COMPRA]', data)
@@ -147,7 +148,7 @@ console.log('[FACTURAS DE COMPRA]', data)
             prefix: '',
             number: invoice.SudocProv
         },
-        observations: `Factura de oringen hiopos # ${data.Serie}/${data.Numero}`,
+        observations: `Factura de oringen hiopos # ${invoice.Serie}/${invoice.Numero}`,
         items: invoice.DetalleDocumento.map(item => ({
             code: item.RefArticulo,
             description: item.RefArticulo,
@@ -188,48 +189,30 @@ export const setSiigoSalesInvoiceData = async (data) => {
     }))
 }
 
-const setSiigoPurchaseItems = async (data) => {
+export const setItemData = async (item) => {
     try {
-        // Extraer identificadores únicos (CodArticulo)
-        const itemCode = data.map(item => item.RefArticulo);
+        const taxes = await getTaxesByName(item.DetalleImpuesto); // Esperar el resultado
+        // Obtener los grupos de cuentas
+        const inventoryGroups = await getInvetoryGroups();
+        console.log('GRUPOS DE INVENTARIO', inventoryGroups)
 
-        // Verificar cuáles artículos existen en Siigo
-        const existingItems = await getItemByCode(itemCode);
+        // Buscar el grupo de cuentas que coincide con el nombre
+        // Convertir tanto el nombre de la familia de Hiopos como el de Siigo a minúsculas
+        const itemFamilyLower = item.Familia.toLowerCase();
+        // Buscar el grupo de cuentas que coincide con el nombre en minúsculas
+        const accountGroup = inventoryGroups.find(group => group.name.toLowerCase() === itemFamilyLower);
 
-        // Determinar los artículos que faltan
-        const missingItems = data.filter(item =>
-            !existingItems.some(existing => existing.RefArticulo === item.RefArticulo)
-        );
 
-        // Crear los artículos faltantes en Siigo
-        const createdItems = await createMissingItems(missingItems);
-
-        // Consolidar los resultados
-        const result = [...existingItems, ...createdItems];
-        return result;
-    } catch (error) {
-
-    }
-}
-
-export const createPurchaseInvoice = async (data) => {
-    try {
-        const response = await setSiigoPurchaseInvoiceData(data)
-    } catch (error) {
-
-    }
-}
-
-export const createSiigoItem = async (item) => {
-    try {
-        const item = {
+        // Si se encuentra el grupo de cuentas, obtener su id
+        const accountGroupId = accountGroup ? accountGroup.id : 'Producto';
+        return  {
             code: item.RefArticulo,
-            account_group: 763, //Revisarlo porque no se sabe de donde tomarlo
+            account_group: accountGroupId, //Revisarlo porque no se sabe de donde tomarlo
             name: item.Articulo,
             stock_control: false,
             active: true,
-            unit_label: UnidadMedida,
-            taxes:[],
+            unit_label: item.UnidadMedida,
+            taxes,
             prices: [
                 {
                     currency_code: 'COP',
@@ -241,11 +224,83 @@ export const createSiigoItem = async (item) => {
                     ]
                 }
             ]
-
-
         }
     } catch (error) {
-        
+        console.log('error armando la data del articulo')
+        throw error
+    }
+}
+const  getTaxesByName = async (hioposTaxes) => {
+    // Cargar impuestos en caché si no están cargados
+    if (taxCache.length === 0) {
+        console.log('Cargando impuestos desde Siigo...');
+        taxCache = await getTaxes(); // Consultar todos los impuestos una vez
+    }
+
+    // Procesar impuestos de Hiopos
+    return hioposTaxes.map(hioposTax => {
+        const matchedTax = taxCache.find(siigoTax => siigoTax.name === hioposTax.NombreImpuesto);
+        if (matchedTax) {
+            return {
+                name: hioposTax.NombreImpuesto,
+                percentage: parseFloat(hioposTax.PorcentajeImpuesto),
+                id: matchedTax.id,
+                status: 'found', // Impuesto encontrado
+            };
+        } else {
+            return {
+                name: hioposTax.NombreImpuesto,
+                percentage: parseFloat(hioposTax.PorcentajeImpuesto),
+                id: null,
+                status: 'not_found', // Impuesto no encontrado
+            };
+        }
+    });
+}
+
+const getTaxes = async () => {
+    try {
+        const options = await getSiigoHeadersOptions()
+        const response = await axios.get(`${SIIGO_BASE_URL}/v1/taxes`, options)
+        return response.data
+    } catch (error) {
+        console.log('Error en consulta de impuestos:', error)
+        handleServiceError(error)
+    }
+}
+
+export const createPurchaseInvoice = async (data) => {
+    try {
+        const response = await setSiigoPurchaseInvoiceData(data)
+
+    } catch (error) {
+        handleServiceError(error)
+    }
+}
+
+export const createSiigoItem = async (item) => {
+    try {
+        const options = await getSiigoHeadersOptions();
+        const data = await setItemData(item);
+        console.log('Data armada para crear Articulo:', data);
+
+        const response = await axios.post(`${SIIGO_BASE_URL}/v1/products`, data, options);
+        return response.data
+    } catch (error) {
+        // Si ocurre un error, devolver el estado 'error' y el mensaje de error
+        console.log('Error de creacion de item', error.response.data)
+        handleServiceError(error); // Maneja el error si es necesario
+    }
+};
+
+const getInvetoryGroups = async () => {
+    try {
+        const options = await getSiigoHeadersOptions()
+        const url = `${SIIGO_BASE_URL}/v1/account-groups`
+        const response = await axios.get(url,options)
+        return response.data
+    } catch (error) {
+        handleServiceError(error)
     }
 }
 

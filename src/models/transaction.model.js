@@ -31,9 +31,9 @@ TransactionModel.init({
         defaultValue: 'validation'
     },
     items_validator: {
-        type: DataTypes.ENUM('created', 'exist', 'error', 'validation'),
-        allowNull: false,
-        defaultValue: 'validation'
+        type: DataTypes.JSONB,
+        allowNull: true,
+        default: []
     },
     siigo_response: {
         type: DataTypes.JSONB,
