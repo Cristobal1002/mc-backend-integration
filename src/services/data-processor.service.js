@@ -1,5 +1,7 @@
 import {hioposService, siigoService} from "./index.js";
 import {model} from "../models/index.js";
+import {setItemDataForInvoice} from "./siigo.service.js";
+
 export const getHioposLote = async (type, filter) => {
     try {
         // Llamar al servicio para sincronizar compras o ventas
@@ -96,70 +98,168 @@ export const getValidationRegisterData = async (type) => {
 export const purchaseValidator = async () => {
     try {
         const validationInfo = await getValidationRegisterData('purchases');
-        for (const invoice of validationInfo) {
-            const { identification } = invoice.core_data.supplier
-            const {DetalleDocumento} = invoice.hiopos_data
 
-            //Se valida el proveedor o se crea
-            const getSiigoContact = await siigoService.getContactsByIdentification(identification)
-            console.log('Siigo contact:',getSiigoContact)
-            if (!getSiigoContact || getSiigoContact.results.length === 0){
-                const getHioposContact = await hioposService.getContactByDocument('/vendors', identification)
-                console.log('Hiopos Vendor Contact', getHioposContact)
-                const creteVendorResponse = await siigoService.createContact('/vendors', getHioposContact.Proveedores)
-                if(creteVendorResponse){
-                    await model.TransactionModel.update({ vendor_validator: 'created' }, { where: { id: invoice.id } });
+        for (const currentInvoice of validationInfo) {
+            const { identification } = currentInvoice.core_data.supplier;
+            const { DetalleDocumento } = currentInvoice.hiopos_data;
+            const { DetalleMediosdepago } = currentInvoice.hiopos_data;
 
-                } else {
-                    await model.TransactionModel.update({ vendor_validator: 'error' }, { where: { id: invoice.id } });
+            const invoiceData = {}; // Para la creación de la factura final
+
+            try {
+
+                //Validación de documentos
+
+                const siigoDocument = await siigoService.matchDocumentTypeByName('FC', currentInvoice.hiopos_data.Serie);
+                if(!siigoDocument || !siigoDocument.id){
+                    await model.TransactionModel.update({
+                        document_validator_status: 'failed',
+                        document_validator_details: siigoDocument,
+                    }, { where: { id: currentInvoice.id } });
+                }else{
+                    await model.TransactionModel.update({
+                        document_validator_status: 'success',
+                        document_validator_details: siigoDocument,
+                    }, { where: { id: currentInvoice.id } });
+                    invoiceData.document = siigoDocument
                 }
-            } else {
-                await model.TransactionModel.update({ vendor_validator: 'exist' }, { where: { id: invoice.id } });
-                console.log("Se encontró al proveedor:", getSiigoContact);
-            }
 
-            // Se validan los articulos o se crean
-            const itemsValidator = []; // Arreglo para almacenar el estado de cada artículo
+                //Validacion de centro de costo
+                const coce = await siigoService.matchCostCenter(currentInvoice.hiopos_data.Almacen);
+                if(!coce || !coce.id){
+                    await model.TransactionModel.update({
+                        cost_center_validator_status: 'failed',
+                        cost_center_validator_details: coce,
+                    }, { where: { id: currentInvoice.id } });
+                }else{
+                    await model.TransactionModel.update({
+                        cost_center_validator_status: 'success',
+                        cost_center_validator_details: coce,
+                    }, { where: { id: currentInvoice.id } });
+                    invoiceData.cost_center = coce
+                }
 
-            // Se validan los articulos o se crean
-            const itemsValidationResults = []; // Arreglo para almacenar los resultados de los artículos
-            for (const item of DetalleDocumento) {
-                const getSiigoItem = await siigoService.getItemByCode(item.RefArticulo);
-                let validationResult = {
-                    item: item.RefArticulo,
-                    status: '',
-                    details: []
-                };
+                // Validación de proveedores
+                const siigoContact = await siigoService.getContactsByIdentification(identification);
+                if (!siigoContact || siigoContact.results.length === 0) {
+                    const hioposContact = await hioposService.getContactByDocument('/vendors', identification);
+                    const createdVendor = await siigoService.createContact('/vendors', hioposContact.Proveedores);
 
-                if (!getSiigoItem || getSiigoItem.results.length === 0) {
-                    console.log('No existe el articulo:', item);
-
-                    try {
-                        const createItem = await siigoService.createSiigoItem(item);
-                        validationResult.status = 'created';
-                        validationResult.details.push(createItem.details); // Guarda la respuesta de creación
-                    } catch (createError) {
-                        console.error('Error al crear artículo:', createError);
-                        validationResult.status = 'error';
-                        validationResult.details.push({ error: createError.data.Errors || createError.message });
+                    if (createdVendor) {
+                        await model.TransactionModel.update({
+                            contact_validator_status: 'success',
+                            contact_validator_details: [{ message: 'Proveedor creado exitosamente', vendorId: createdVendor.id }],
+                        }, { where: { id: currentInvoice.id } });
+                        invoiceData.supplier = { id: createdVendor.id };
+                    } else {
+                        await model.TransactionModel.update({
+                            contact_validator_status: 'failed',
+                            contact_validator_details: [{ error: 'Error al crear el proveedor en Siigo' }],
+                        }, { where: { id: currentInvoice.id } });
+                        continue; // Pasar a la siguiente factura
                     }
                 } else {
-                    console.log('Articulo encontrado:', getSiigoItem.results);
-                    validationResult.status = 'exist';
-                    validationResult.details.push(getSiigoItem.results[0].id); // Almacena el artículo encontrado
+                    await model.TransactionModel.update({
+                        contact_validator_status: 'success',
+                        contact_validator_details: [{ message: 'Proveedor encontrado', vendorId: siigoContact.results[0].id }],
+                    }, { where: { id: currentInvoice.id } });
+                    invoiceData.supplier = { id: siigoContact.results[0].id };
                 }
 
-                itemsValidationResults.push(validationResult); // Agrega el resultado al arreglo
-            }
+                // Validación de artículos
+                const itemsValidationResults = [];
+                for (const item of DetalleDocumento) {
+                    const siigoItem = await siigoService.getItemByCode(item.RefArticulo);
 
-            // Actualiza el campo items_validator con el arreglo de resultados
-            await model.TransactionModel.update({
-                items_validator: itemsValidationResults // Aquí pasamos el arreglo directamente
-            }, {
-                where: { id: invoice.id }
-            });
+                    if (!siigoItem || siigoItem.results.length === 0) {
+                        try {
+                            const createdItem = await siigoService.createSiigoItem(item);
+                            itemsValidationResults.push({ item: item.RefArticulo, status: 'success', details: createdItem });
+                        } catch (error) {
+                            itemsValidationResults.push({
+                                item: item.RefArticulo,
+                                status: 'failed',
+                                details: { error: error.data?.Errors || error.message },
+                            });
+                        }
+                    } else {
+                        itemsValidationResults.push({
+                            item: item.RefArticulo,
+                            status: 'success',
+                            details: siigoItem.results[0],
+                        });
+                    }
+                }
+
+
+                const itemsStatus = itemsValidationResults.some(result => result.status === 'failed') ? 'failed' : 'success';
+                await model.TransactionModel.update({
+                    items_validator_status: itemsStatus,
+                    items_validator_details: itemsValidationResults,
+                }, { where: { id: currentInvoice.id } });
+                //invoiceData.items = itemsValidationResults;
+
+                //Fijar los articulos como se debe
+                let siigoItem = []
+                if(itemsStatus === 'success'){
+                    for (const item of DetalleDocumento) {
+                        siigoItem.push( await siigoService.setItemDataForInvoice(item))
+                    }
+                }
+
+                // Validación de métodos de pago
+                const paymentsValidationResults = [];
+                for (const payment of DetalleMediosdepago) {
+                    try {
+                        const siigoMethod = await siigoService.getPaymentsByName('FC', payment);
+                        if (!siigoMethod || !siigoMethod.id) {
+                            paymentsValidationResults.push({
+                                id: null,
+                                name: payment.MedioPago,
+                                value: payment.Importe,
+                                status: 'failed',
+                                details: [`El método de pago "${payment.MedioPago}" no existe en Siigo`],
+                            });
+                        } else {
+                            paymentsValidationResults.push({
+                                id: siigoMethod.id,
+                                name: siigoMethod.name,
+                                value: payment.Importe,
+                                status: 'success',
+                                details: [`Método de pago "${siigoMethod.name}" procesado correctamente.`],
+                            });
+                        }
+                    } catch (error) {
+                        paymentsValidationResults.push({
+                            id: null,
+                            name: payment.MedioPago,
+                            value: payment.Importe,
+                            status: 'failed',
+                            details: [`Error procesando el método de pago "${payment.MedioPago}"`],
+                        });
+                    }
+                }
+
+                const paymentsStatus = paymentsValidationResults.some(result => result.status === 'failed') ? 'failed' : 'success';
+                await model.TransactionModel.update({
+                    payments_validator_status: paymentsStatus,
+                    payments_validator_details: paymentsValidationResults,
+                }, { where: { id: currentInvoice.id } });
+                invoiceData.payments = paymentsValidationResults;
+                invoiceData.items = siigoItem
+                // Si todo está validado correctamente
+                console.log('Datos preparados para la factura:', invoiceData);
+
+            } catch (validationError) {
+                console.error(`Error procesando factura ID: ${currentInvoice.id}`, validationError);
+                await model.TransactionModel.update({
+                    error: validationError.message,
+                    status: 'failed',
+                }, { where: { id: currentInvoice.id } });
+            }
         }
     } catch (error) {
-        throw error
+        console.error('Error general del validador:', error);
+        throw error;
     }
-}
+};

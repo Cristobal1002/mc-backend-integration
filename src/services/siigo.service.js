@@ -14,6 +14,9 @@ let tokenExpirationTime = null;
 let isFetchingToken = false; // Variable para manejar el bloqueo
 let tokenPromise = null; // Promesa compartida durante la obtención del token
 let taxCache = []; //Cache para no consultar siempre los impuestos
+let paymentsCache = null //Cache pa medios de pago de siigo
+let documentCache = null
+let costCenterCache = null
 
 // Obtener token desde cache en memoria o generar uno nuevo
 export const getSiigoToken = async () => {
@@ -148,7 +151,7 @@ console.log('[FACTURAS DE COMPRA]', data)
             prefix: '',
             number: invoice.SudocProv
         },
-        observations: `Factura de oringen hiopos # ${invoice.Serie}/${invoice.Numero}`,
+        observations: `Factura de origen hiopos # ${invoice.Serie}/${invoice.Numero}`,
         items: invoice.DetalleDocumento.map(item => ({
             code: item.RefArticulo,
             description: item.RefArticulo,
@@ -189,7 +192,7 @@ export const setSiigoSalesInvoiceData = async (data) => {
     }))
 }
 
-export const setItemData = async (item) => {
+export const setItemCreationData = async (item) => {
     try {
         const taxes = await getTaxesByName(item.DetalleImpuesto); // Esperar el resultado
         // Obtener los grupos de cuentas
@@ -230,10 +233,19 @@ export const setItemData = async (item) => {
         throw error
     }
 }
+
+export const setItemInvoiceData = async (item) => {
+    try {
+        const taxes = await getTaxesByName(item.DetalleImpuesto);
+
+    } catch (error) {
+
+    }
+}
 const  getTaxesByName = async (hioposTaxes) => {
     // Cargar impuestos en caché si no están cargados
     if (taxCache.length === 0) {
-        console.log('Cargando impuestos desde Siigo...');
+        //console.log('Cargando impuestos desde Siigo...');
         taxCache = await getTaxes(); // Consultar todos los impuestos una vez
     }
 
@@ -281,7 +293,7 @@ export const createPurchaseInvoice = async (data) => {
 export const createSiigoItem = async (item) => {
     try {
         const options = await getSiigoHeadersOptions();
-        const data = await setItemData(item);
+        const data = await setItemCreationData(item);
         console.log('Data armada para crear Articulo:', data);
 
         const response = await axios.post(`${SIIGO_BASE_URL}/v1/products`, data, options);
@@ -381,6 +393,130 @@ export const createContact = async (type, contact) => {
         }
     } catch (error) {
         console.log('Error creando el proveedor en siigo', error.response.data)
+        handleServiceError(error)
+    }
+}
+
+const getSiigoPaymentMethods = async (documentType) => {
+    const options = await getSiigoHeadersOptions()
+    const url = `${SIIGO_BASE_URL}/v1/payment-types?document_type=${documentType}`
+    try {
+        const response = await axios.get(url, options)
+        return {type:documentType, payments:response.data}
+    } catch (error) {
+        handleServiceError(error)
+    }
+}
+
+export const getPaymentsByName = async (type, hioposPayment) => {
+    // Validar si la caché es nula o el tipo no coincide
+    if (paymentsCache === null || type !== paymentsCache.type) {
+        paymentsCache = await getSiigoPaymentMethods(type);
+     //   console.log('Payment Cache Siigo', paymentsCache);
+    }
+
+    // Buscar el método de pago en la caché por nombre
+    const matchedPayment = paymentsCache.payments.find(
+        siigoPayment => siigoPayment.name.toLowerCase() === hioposPayment.MedioPago.toLowerCase()
+    );
+
+    // Verificar si se encontró un pago correspondiente
+    if (matchedPayment) {
+        return {
+            id: matchedPayment.id,
+            name: matchedPayment.name,
+            value: hioposPayment.Importe
+        };
+    } else {
+        return {
+            name: hioposPayment.MedioPago,
+            message: `El método de pago "${hioposPayment.MedioPago}" no se encuentra registrado en Siigo.`
+        };
+    }
+};
+
+const getDocumentIdByType = async (documentType) => {
+    try {
+        const options = await getSiigoHeadersOptions()
+        const url = `${SIIGO_BASE_URL}/v1/document-types?type=${documentType}`
+        const response = await axios.get(url, options)
+        return {type:documentType, documents:response.data}
+    } catch (error) {
+        handleServiceError(error)
+    }
+}
+
+export const matchDocumentTypeByName = async (type, hioposDocument) => {
+    //console.log('DOCUMENT EN MATCH', hioposDocument)
+    // Validar si la caché es nula o el tipo no coincide
+    if (documentCache === null || type !== documentCache.type) {
+        documentCache = await getDocumentIdByType(type);
+    }
+
+    // Buscar el tipo de pago en la caché por nombre
+    const matchedDocument = documentCache.documents.find(
+        siigoDocument => siigoDocument.name.toLowerCase() === hioposDocument.toLowerCase()
+    );
+
+    if(matchedDocument){
+        return {
+            id: matchedDocument.id,
+            name: matchedDocument.name
+        }
+    }else {
+        return {
+            name: hioposDocument,
+            message: `El documento de compra "${hioposDocument}" no se encuentra registrado en Siigo.`
+        }
+    }
+
+}
+
+const getCostCenters = async () => {
+    try {
+        const options = await getSiigoHeadersOptions();
+        const url = `${SIIGO_BASE_URL}/v1/cost-centers`
+        const response = await axios.get(url, options)
+        return response.data
+    }catch (error) {
+        handleServiceError(error)
+    }
+}
+
+export const matchCostCenter = async (hioposCostCenter) => {
+
+    if (costCenterCache === null){
+        costCenterCache = await getCostCenters()
+    }
+    //console.log('Cetros de costo:', costCenterCache)
+    const matchedCenter = costCenterCache.find(siigoCenter => siigoCenter.name.toLowerCase() === hioposCostCenter.toLowerCase() );
+
+    if(matchedCenter){
+        return {
+            id: matchedCenter.id,
+            name: matchedCenter.name
+        }
+    }else{
+        return {
+            name: hioposCostCenter,
+            message: `El centro de costo "${hioposCostCenter}" no se encuentra registrado en Siigo.`
+        }
+    }
+}
+
+export const setItemDataForInvoice = async (item) => {
+    try {
+        const taxes = await getTaxesByName(item.DetalleImpuesto); // Esperar el resultado
+        return  {
+            code: item.RefArticulo,
+            description: item.Articulo,
+            quantity: item.Unidades,
+            price: item.Precio,
+            discount: item.Descuento,
+            taxes,
+        }
+
+    } catch (error) {
         handleServiceError(error)
     }
 }

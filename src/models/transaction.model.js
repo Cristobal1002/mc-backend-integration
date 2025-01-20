@@ -25,15 +25,51 @@ TransactionModel.init({
         type: DataTypes.JSONB,
         allowNull: true
     },
-    vendor_validator: {
-        type: DataTypes.ENUM('created', 'exist', 'error', 'validation'),
-        allowNull: false,
+    document_validator_status: {
+        type:  DataTypes.ENUM('success', 'failed', 'validation'),
         defaultValue: 'validation'
     },
-    items_validator: {
+    document_validator_details: {
+        type: DataTypes.JSONB,
+        allowNull: true
+    },
+    cost_center_validator_status: {
+        type:  DataTypes.ENUM('success', 'failed', 'validation'),
+        defaultValue: 'validation'
+    },
+    cost_center_validator_details: {
+        type: DataTypes.JSONB,
+        allowNull: true
+    },
+    contact_validator_status: {
+        type:  DataTypes.ENUM('success', 'failed', 'validation'),
+        defaultValue: 'validation'
+    },
+    contact_validator_details: {
+        type: DataTypes.JSONB,
+        allowNull: true
+    },
+    items_validator_status:{
+        type:  DataTypes.ENUM('success', 'failed', 'validation'),
+        defaultValue: 'validation'
+    },
+    items_validator_details: {
         type: DataTypes.JSONB,
         allowNull: true,
         default: []
+    },
+    payments_validator_status:{
+        type:  DataTypes.ENUM('success', 'failed', 'validation'),
+        defaultValue: 'validation'
+    },
+    payments_validator_details: {
+        type: DataTypes.JSONB,
+        allowNull: true,
+        default: []
+    },
+    siigo_body:{
+        type: DataTypes.JSONB,
+        allowNull: true,
     },
     siigo_response: {
         type: DataTypes.JSONB,
@@ -44,7 +80,7 @@ TransactionModel.init({
         allowNull: true
     },
     status: {
-        type: DataTypes.ENUM('success', 'failed', 'validation', 'validated')
+        type: DataTypes.ENUM('success', 'failed', 'validation')
     }
 },{
     sequelize,

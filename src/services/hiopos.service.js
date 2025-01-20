@@ -24,10 +24,15 @@ let hioposTokenPromise = null; // Promesa compartida durante la obtención del t
 const cleanInvalidJSON = (jsonString) => {
     try {
         return jsonString
-            .replace(/:\s*,/g, ': "",')
-            .replace(/,(\s*[}\]])/g, '$1')
-            .replace(/([{[])\s*,/g, '$1')
-            .replace(/[\x00-\x1F\x80-\xFF]/g, '')
+            .replace(/:\s*,/g, ': "",') // Maneja valores faltantes
+            .replace(/,(\s*[}\]])/g, '$1') // Quita comas adicionales antes de objetos o arrays cerrados
+            .replace(/([{[])\s*,/g, '$1') // Quita comas adicionales al inicio de objetos o arrays
+            .replace(/[\x00-\x1F\x80-\xFF]/g, '') // Elimina caracteres no válidos
+            .replace(/"([^"]+)"\s*:/g, (match, key) => {
+                // Limpia espacios, % y otros caracteres no deseados en las claves
+                const cleanKey = key.replace(/\s+|%/g, '');
+                return `"${cleanKey}":`;
+            })
             .replace(/"(\w+)"\s*:\s*(-?\d{1,3}(?:,\d{3})*\.\d+)/g, (match, key, value) => {
                 const cleanValue = value.replace(/,/g, '');
                 return `"${key}": ${cleanValue}`;
