@@ -76,7 +76,9 @@ export const registerTransaction = async (type, hioposData, coreData) => {
 
 export const syncDataProcess= async () => {
     try {
-        await purchaseValidator()
+        await purchaseValidator();
+        await purchaseInvoiceSync();
+
     } catch (error) {
         console.error('Error al sincronizar con Siigo:', error);
         throw error;
@@ -95,6 +97,18 @@ export const getValidationRegisterData = async (type) => {
     }
 }
 
+export const getInvoicesToCreation = async (type) => {
+    try {
+        return await model.TransactionModel.findAll({where: {
+                status: 'to-invoice',
+                type
+            }, raw: true})
+    } catch (error) {
+        console.error('Error al traer los datos de la BD', error);
+        throw error;
+    }
+}
+
 export const purchaseValidator = async () => {
     try {
         const validationInfo = await getValidationRegisterData('purchases');
@@ -104,7 +118,13 @@ export const purchaseValidator = async () => {
             const { DetalleDocumento } = currentInvoice.hiopos_data;
             const { DetalleMediosdepago } = currentInvoice.hiopos_data;
 
-            const invoiceData = {}; // Para la creación de la factura final
+            const invoiceData = {
+                date: currentInvoice.core_data.date,
+                provider_invoice: currentInvoice.core_data.provider_invoice,
+                observations: currentInvoice.core_data.observations,
+                discount_type: 'Percentage',
+                tax_included: false
+            }; // Para la creación de la factura final
 
             try {
 
@@ -136,7 +156,7 @@ export const purchaseValidator = async () => {
                         cost_center_validator_status: 'success',
                         cost_center_validator_details: coce,
                     }, { where: { id: currentInvoice.id } });
-                    invoiceData.cost_center = coce
+                    invoiceData.cost_center = coce.id
                 }
 
                 // Validación de proveedores
@@ -150,7 +170,7 @@ export const purchaseValidator = async () => {
                             contact_validator_status: 'success',
                             contact_validator_details: [{ message: 'Proveedor creado exitosamente', vendorId: createdVendor.id }],
                         }, { where: { id: currentInvoice.id } });
-                        invoiceData.supplier = { id: createdVendor.id };
+                        invoiceData.supplier = { id: createdVendor.id, identification: createdVendor.identification };
                     } else {
                         await model.TransactionModel.update({
                             contact_validator_status: 'failed',
@@ -163,7 +183,7 @@ export const purchaseValidator = async () => {
                         contact_validator_status: 'success',
                         contact_validator_details: [{ message: 'Proveedor encontrado', vendorId: siigoContact.results[0].id }],
                     }, { where: { id: currentInvoice.id } });
-                    invoiceData.supplier = { id: siigoContact.results[0].id };
+                    invoiceData.supplier = { id: siigoContact.results[0].id, identification: siigoContact.results[0].identification };
                 }
 
                 // Validación de artículos
@@ -247,8 +267,33 @@ export const purchaseValidator = async () => {
                 }, { where: { id: currentInvoice.id } });
                 invoiceData.payments = paymentsValidationResults;
                 invoiceData.items = siigoItem
-                // Si todo está validado correctamente
+
+
                 console.log('Datos preparados para la factura:', invoiceData);
+
+                //Actualiza status final y arma le body para enviar a siigo
+                const endValidation = await model.TransactionModel.findByPk(currentInvoice.id);
+                // Lista de los campos de validación
+                const validationFields = [
+                    'document_validator_status',
+                    'cost_center_validator_status',
+                    'contact_validator_status',
+                    'items_validator_status',
+                    'payments_validator_status'
+                ];
+
+                // Verifica si todos los campos están en 'success'
+                const allSuccess = validationFields.every(
+                    (field) => endValidation[field] === 'success'
+                );
+
+                endValidation.siigo_body = invoiceData
+                // Actualiza el estado general
+                endValidation.status = allSuccess ? 'to-invoice' : 'failed';
+
+                // Guarda los cambios en la base de datos
+                await endValidation.save();
+
 
             } catch (validationError) {
                 console.error(`Error procesando factura ID: ${currentInvoice.id}`, validationError);
@@ -263,3 +308,23 @@ export const purchaseValidator = async () => {
         throw error;
     }
 };
+
+const purchaseInvoiceSync = async () => {
+    try {
+        const invoices = await getInvoicesToCreation('purchases')
+        for (const invoice of invoices) {
+            try {
+                const creation = await siigoService.createPurchaseInvoice(invoice.siigo_body);
+                if(creation){
+                    await model.TransactionModel.update({status: 'success', siigo_response:  creation}, {where: {id: invoice.id}})
+                }
+            } catch (errorInvoice) {
+                console.error('Error al crear la factura', errorInvoice)
+                await model.TransactionModel.update({status: 'failed', error:  errorInvoice.data}, {where: {id: invoice.id}})
+            }
+        }
+    } catch (error) {
+        console.error('Error al crear la factura')
+        throw error
+    }
+}

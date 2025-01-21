@@ -136,61 +136,55 @@ export const getItemByCode = async (code) => {
 }
 
 
+const parseProviderInvoice = (input) => {
+    const match = input.match(/^([a-zA-Z]+)(\d+)$/);
+    if (!match) {
+        throw new Error('El formato del campo SudocProv no es válido');
+    }
+
+    return {
+        prefix: match[1], // Captura las letras iniciales
+        number: parseInt(match[2], 10) // Convierte los números en un entero
+    };
+};
+
 export const setSiigoPurchaseInvoiceData = async (data) => {
-console.log('[FACTURAS DE COMPRA]', data)
-    return data.map(invoice => ({
-        date: DateTime.now().toISODate(),
-        document: {
-            id: process.env.SIIGO_PURCHASE_ID
-        },
-        supplier: {
-            identification: invoice.DetalleProveedor.Nif
-        },
-        cost_center: invoice.Almacen,
-        provider_invoice: {
-            prefix: '',
-            number: invoice.SudocProv
-        },
-        observations: `Factura de origen hiopos # ${invoice.Serie}/${invoice.Numero}`,
-        items: invoice.DetalleDocumento.map(item => ({
-            code: item.RefArticulo,
-            description: item.RefArticulo,
-            quantity: item.Unidades,
-            price: item.Precio,
-            taxes: item.DetalleImpuesto.map(tax => ({
-                id: tax.NombreImpuesto
+    console.log('[FACTURAS DE COMPRA]', data);
+    return data.map(invoice => {
+        let providerInvoice
+        try {
+            providerInvoice = parseProviderInvoice(invoice.SudocProv); // Intenta parsear SudocProv
+        } catch (error) {
+            console.error(`Error procesando SudocProv: ${invoice.SudocProv}. Usando valores por defecto.`);
+        }
+
+        return {
+            date: DateTime.now().toISODate(),
+            document: {
+                id: process.env.SIIGO_PURCHASE_ID
+            },
+            supplier: {
+                identification: invoice.DetalleProveedor.Nif
+            },
+            cost_center: invoice.Almacen,
+            provider_invoice: providerInvoice, // Asignar el objeto parseado
+            observations: `Factura de origen hiopos # ${invoice.Serie}/${invoice.Numero}`,
+            items: invoice.DetalleDocumento.map(item => ({
+                code: item.RefArticulo,
+                description: item.RefArticulo,
+                quantity: item.Unidades,
+                price: item.Precio,
+                taxes: item.DetalleImpuesto.map(tax => ({
+                    id: tax.NombreImpuesto
+                }))
             })),
             payments: invoice.DetalleMediosdepago.map(payment => ({
                 id: payment.MedioPago,
-                value:payment.Importe
+                value: payment.Importe
             }))
-        }))
-    }))
-
-}
-
-export const setSiigoSalesInvoiceData = async (data) => {
-    return data.map(invoice => ({
-        date: DateTime.now().toISODate(),
-        document: {
-            id: process.env.SIIGO_SALES_ID
-        },
-        customer: {
-            identification: invoice.DatosCliente.Nif
-        },
-        items: invoice.DetalleDocumento.map(item => ({
-            code: item.RefArticulo,
-            quantity: item.Unidades,
-            price: item.Precio,
-            discount: item. Descuento
-        })),
-        payments: invoice.MedioPago.map(payment => ({
-            id: payment.MedioDePago,
-            value: payment.Valor
-        })),
-        observations: `Integrado automaticamente, documento Hiopos: ${invoice.Serie}/${invoice.Numero}`
-    }))
-}
+        };
+    });
+};
 
 export const setItemCreationData = async (item) => {
     try {
@@ -242,15 +236,19 @@ export const setItemInvoiceData = async (item) => {
 
     }
 }
-const  getTaxesByName = async (hioposTaxes) => {
+const getTaxesByName = async (hioposTaxes) => {
     // Cargar impuestos en caché si no están cargados
     if (taxCache.length === 0) {
-        //console.log('Cargando impuestos desde Siigo...');
         taxCache = await getTaxes(); // Consultar todos los impuestos una vez
     }
 
     // Procesar impuestos de Hiopos
-    return hioposTaxes.map(hioposTax => {
+    const mappedTaxes = hioposTaxes.map(hioposTax => {
+        if (!hioposTax.NombreImpuesto || hioposTax.PorcentajeImpuesto === null) {
+            // Ignorar impuestos vacíos o con datos incompletos
+            return null;
+        }
+
         const matchedTax = taxCache.find(siigoTax => siigoTax.name === hioposTax.NombreImpuesto);
         if (matchedTax) {
             return {
@@ -268,8 +266,10 @@ const  getTaxesByName = async (hioposTaxes) => {
             };
         }
     });
-}
 
+    // Filtrar valores nulos y objetos incompletos
+    return mappedTaxes.filter(tax => tax && tax.id !== null);
+};
 const getTaxes = async () => {
     try {
         const options = await getSiigoHeadersOptions()
@@ -283,8 +283,10 @@ const getTaxes = async () => {
 
 export const createPurchaseInvoice = async (data) => {
     try {
-        const response = await setSiigoPurchaseInvoiceData(data)
-
+        const options = await getSiigoHeadersOptions()
+        const url = `${SIIGO_BASE_URL}/v1/purchases`
+        const response = await axios.post(url, data, options)
+        return response.data
     } catch (error) {
         handleServiceError(error)
     }
@@ -508,6 +510,7 @@ export const setItemDataForInvoice = async (item) => {
     try {
         const taxes = await getTaxesByName(item.DetalleImpuesto); // Esperar el resultado
         return  {
+            type: 'Product',
             code: item.RefArticulo,
             description: item.Articulo,
             quantity: item.Unidades,

@@ -76,11 +76,11 @@ TransactionModel.init({
         allowNull: true
     },
     error: {
-        type: DataTypes.STRING,
+        type: DataTypes.JSONB,
         allowNull: true
     },
     status: {
-        type: DataTypes.ENUM('success', 'failed', 'validation')
+        type: DataTypes.ENUM('success', 'failed', 'validation', 'to-invoice')
     }
 },{
     sequelize,
