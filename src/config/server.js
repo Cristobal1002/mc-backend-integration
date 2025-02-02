@@ -9,7 +9,7 @@ import { startCronJobs } from './cron.config.js';
 
 
 export default async () => {
-    const port = process.env.SERVER_PORT;
+    const port = process.env.SERVER_PORT || 3000;
 
     const app = express();
     // CORS
