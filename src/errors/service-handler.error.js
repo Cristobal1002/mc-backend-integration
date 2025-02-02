@@ -1,7 +1,7 @@
 import {CustomError} from "./index.js"
 
 export const handleServiceError = (error) => {
-    console.error("Error en servicio:", error);
+    //console.error("Error en servicio:", error);
 
     if (error) {
         throw new CustomError({

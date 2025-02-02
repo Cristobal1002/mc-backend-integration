@@ -9,6 +9,16 @@ TransactionModel.init({
         defaultValue: DataTypes.UUIDV4, // Genera automáticamente un UUID v4
         primaryKey: true
     },
+    lote_id:{
+        type: DataTypes.UUID,
+        allowNull: false,
+        references: {
+            model: "lotes",
+            key: "id",
+        },
+        onUpdate: "CASCADE",
+        onDelete: "CASCADE",
+    },
     type: {
         type: DataTypes.ENUM('purchases', 'sales'),
         allowNull: false
@@ -34,7 +44,7 @@ TransactionModel.init({
         allowNull: true
     },
     cost_center_validator_status: {
-        type:  DataTypes.ENUM('success', 'failed', 'validation'),
+        type:  DataTypes.ENUM('success', 'failed', 'default', 'validation'),
         defaultValue: 'validation'
     },
     cost_center_validator_details: {

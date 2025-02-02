@@ -17,6 +17,7 @@ let taxCache = []; //Cache para no consultar siempre los impuestos
 let paymentsCache = null //Cache pa medios de pago de siigo
 let documentCache = null
 let costCenterCache = null
+let inventoryGroupsCache = null
 
 // Obtener token desde cache en memoria o generar uno nuevo
 export const getSiigoToken = async () => {
@@ -101,7 +102,7 @@ export const getContactsByIdentification = async (identification) => {
         const contact9Digits = await querySiigoContact(cleanIdentification.slice(0, -1));
         return contact9Digits || null; // Retornar null si no hay resultados
     } catch (error) {
-        console.error('Error en getContactsByIdentification:', error);
+        //console.error('Error en getContactsByIdentification:', error);
         handleServiceError(error);
         return null; // Retornar null en caso de error
     }
@@ -112,7 +113,7 @@ const querySiigoContact = async (identification) => {
     try {
         const options = await getSiigoHeadersOptions();
         const url = `${SIIGO_BASE_URL}/v1/customers?identification=${identification}`;
-        console.log('Consultando URL:', url);
+        //console.log('Consultando URL:', url);
         const response = await axios.get(url, options);
         return response.data.results.length > 0 ? response.data : null;
     } catch (error) {
@@ -125,6 +126,7 @@ const querySiigoContact = async (identification) => {
 //"code": "MPP13"
 export const getItemByCode = async (code) => {
     try {
+        console.log('HET ITEM BY CODE', code)
         const options = await   getSiigoHeadersOptions()
         const url = `${SIIGO_BASE_URL}/v1/products?code=${code}`
         const response = await axios.get(url,options)
@@ -186,12 +188,40 @@ export const setSiigoPurchaseInvoiceData = async (data) => {
     });
 };
 
+export const setSiigoSalesInvoiceData = async (data) => {
+    return data.map(invoice => ({
+        date: DateTime.now().toISODate(),
+        document: {
+            id: process.env.SIIGO_SALES_ID
+        },
+        customer: {
+            identification: invoice.DatosCliente.Nif
+        },
+        items: invoice.DetalleDocumento.map(item => ({
+            code: item.RefArticulo,
+            quantity: item.Unidades,
+            price: item.Precio,
+            discount: item. Descuento
+        })),
+        payments: invoice.MedioPago.map(payment => ({
+            id: payment.MedioDePago,
+            value: payment.Valor
+        })),
+        observations: `Integrado automaticamente, documento Hiopos: ${invoice.Serie}/${invoice.Numero}`
+    }))
+}
 export const setItemCreationData = async (item) => {
     try {
-        const taxes = await getTaxesByName(item.DetalleImpuesto); // Esperar el resultado
+        const taxes = await getTaxesByName(item.DetalleImpuesto || item.Impuestos); // Esperar el resultado
         // Obtener los grupos de cuentas
-        const inventoryGroups = await getInvetoryGroups();
-        console.log('GRUPOS DE INVENTARIO', inventoryGroups)
+        let inventoryGroups
+        if(inventoryGroupsCache === null){
+            inventoryGroups = await getInvetoryGroups();
+        }else{
+            inventoryGroups = inventoryGroupsCache
+        }
+
+        //console.log('GRUPOS DE INVENTARIO', inventoryGroups)
 
         // Buscar el grupo de cuentas que coincide con el nombre
         // Convertir tanto el nombre de la familia de Hiopos como el de Siigo a minúsculas
@@ -244,31 +274,29 @@ const getTaxesByName = async (hioposTaxes) => {
 
     // Procesar impuestos de Hiopos
     const mappedTaxes = hioposTaxes.map(hioposTax => {
-        if (!hioposTax.NombreImpuesto || hioposTax.PorcentajeImpuesto === null) {
-            // Ignorar impuestos vacíos o con datos incompletos
-            return null;
+        const taxName = (hioposTax.NombreImpuesto ?? hioposTax.Descripcion)?.trim(); // Elimina espacios extras
+        const taxPercentage = hioposTax.PorcentajeImpuesto ?? hioposTax.Porcentaje;
+
+        console.log('TAX NAME', taxName)
+        if (!taxName) {
+            return null; // Ignorar impuestos sin nombre o sin porcentaje
         }
 
-        const matchedTax = taxCache.find(siigoTax => siigoTax.name === hioposTax.NombreImpuesto);
-        if (matchedTax) {
-            return {
-                name: hioposTax.NombreImpuesto,
-                percentage: parseFloat(hioposTax.PorcentajeImpuesto),
-                id: matchedTax.id,
-                status: 'found', // Impuesto encontrado
-            };
-        } else {
-            return {
-                name: hioposTax.NombreImpuesto,
-                percentage: parseFloat(hioposTax.PorcentajeImpuesto),
-                id: null,
-                status: 'not_found', // Impuesto no encontrado
-            };
-        }
+        // Normalizar nombres a minúsculas para comparación
+        const normalizedTaxName = taxName.toLowerCase();
+
+        const matchedTax = taxCache.find(siigoTax => siigoTax.name.toLowerCase() === normalizedTaxName);
+
+        return {
+            name: taxName,
+            percentage: parseFloat(taxPercentage),
+            id: matchedTax ? matchedTax.id : null,
+            status: matchedTax ? 'found' : 'not_found',
+        };
     });
 
-    // Filtrar valores nulos y objetos incompletos
-    return mappedTaxes.filter(tax => tax && tax.id !== null);
+    // Filtrar valores nulos
+    return mappedTaxes.filter(tax => tax);
 };
 const getTaxes = async () => {
     try {
@@ -292,6 +320,16 @@ export const createPurchaseInvoice = async (data) => {
     }
 }
 
+export const createSaleInvoice = async (data) => {
+    try {
+        const options = await getSiigoHeadersOptions()
+        const url = `${SIIGO_BASE_URL}/v1/invoices`
+        const response = await axios.post(url, data, options)
+        return response.data
+    } catch (error) {
+        handleServiceError(error)
+    }
+}
 export const createSiigoItem = async (item) => {
     try {
         const options = await getSiigoHeadersOptions();
@@ -302,7 +340,7 @@ export const createSiigoItem = async (item) => {
         return response.data
     } catch (error) {
         // Si ocurre un error, devolver el estado 'error' y el mensaje de error
-        console.log('Error de creacion de item', error.response.data)
+        //console.log('Error de creacion de item', error.response.data)
         handleServiceError(error); // Maneja el error si es necesario
     }
 };
@@ -318,14 +356,32 @@ const getInvetoryGroups = async () => {
     }
 }
 
-export const setCustomerContactData = (type, contact) => {
+export const setCustomerContactData = (contact) => {
 
-    const siigoType = 'Customer'
-    const person_type = contact[0].TipoDocumentoFiscal === 'NIT' ? 'Company' : 'Person';
-    const id_type = person_type === 'Person'? 13 : 31;
-    const cleanedNif = contact[0].Nif.replace(/[.,-]/g, '');
-    const identification = personType === 'Company'? cleanedNif.slice(0, 9) : cleanedNif;
+    const customer = contact[0]
+    const isCompany = customer.TipoDocumento === "NIT";
+    const person_type = customer.TipoDocumento === 'NIT' ? 'Company' : 'Person';
+    const cleanedNif = customer.Nif.replace(/[.,-]/g, '');
+    const identification = person_type === 'Company'? cleanedNif.slice(0, 9) : cleanedNif;
 
+    return {
+        type: 'Customer',
+        person_type,
+        id_type: isCompany ? "31" : "13",
+        identification,
+        name: formatSiigoName(isCompany ? "Company" : "Person", customer.Cliente),
+        commercial_name:  customer.Cliente,
+        phone: customer.Telefono,
+        email: customer.Email,
+        /*address: {
+            address: supplier.Direccion,
+            city: {
+                code: supplier.Codigo_Postal.toString(),
+                name: supplier.Poblacion_Ciudad || "Unknown"
+            }
+        },*/
+        comments: customer.Observaciones || "",
+    };
 
 
 }
@@ -392,9 +448,13 @@ export const createContact = async (type, contact) => {
             const data = setVendorContactData(contact)
             const supplier = await axios.post(url, data, options)
             return supplier.data
+        }else if (type === '/customers') {
+            const data = setCustomerContactData(contact);
+            const customer = await axios.post(url, data, options);
+            return customer.data
         }
     } catch (error) {
-        console.log('Error creando el proveedor en siigo', error.response.data)
+        console.log('Error creando el contacto en siigo', error.data)
         handleServiceError(error)
     }
 }
@@ -411,15 +471,25 @@ const getSiigoPaymentMethods = async (documentType) => {
 }
 
 export const getPaymentsByName = async (type, hioposPayment) => {
+    // Función para normalizar texto eliminando tildes y otros diacríticos
+    const normalizeText = (text) =>
+        text?.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
     // Validar si la caché es nula o el tipo no coincide
     if (paymentsCache === null || type !== paymentsCache.type) {
         paymentsCache = await getSiigoPaymentMethods(type);
-     //   console.log('Payment Cache Siigo', paymentsCache);
     }
+
+    // Determinar las propiedades según el tipo
+    const paymentProperty = type === 'FC' ? 'MedioPago' : 'MedioDePago';
+    const valueProperty = type === 'FC' ? 'Importe' : 'Valor';
+
+    // Normalizar los nombres para hacer la comparación
+    const normalizedHioposPayment = normalizeText(hioposPayment[paymentProperty]);
 
     // Buscar el método de pago en la caché por nombre
     const matchedPayment = paymentsCache.payments.find(
-        siigoPayment => siigoPayment.name.toLowerCase() === hioposPayment.MedioPago.toLowerCase()
+        (siigoPayment) => normalizeText(siigoPayment.name) === normalizedHioposPayment
     );
 
     // Verificar si se encontró un pago correspondiente
@@ -427,16 +497,15 @@ export const getPaymentsByName = async (type, hioposPayment) => {
         return {
             id: matchedPayment.id,
             name: matchedPayment.name,
-            value: hioposPayment.Importe
+            value: hioposPayment[valueProperty],
         };
     } else {
         return {
-            name: hioposPayment.MedioPago,
-            message: `El método de pago "${hioposPayment.MedioPago}" no se encuentra registrado en Siigo.`
+            name: hioposPayment[paymentProperty],
+            message: `El método de pago "${hioposPayment[paymentProperty]}" no se encuentra registrado en Siigo.`,
         };
     }
 };
-
 const getDocumentIdByType = async (documentType) => {
     try {
         const options = await getSiigoHeadersOptions()
@@ -449,30 +518,35 @@ const getDocumentIdByType = async (documentType) => {
 }
 
 export const matchDocumentTypeByName = async (type, hioposDocument) => {
-    //console.log('DOCUMENT EN MATCH', hioposDocument)
+    // Normaliza el texto eliminando tildes y otros diacríticos
+    const normalizeText = (text) =>
+        text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
     // Validar si la caché es nula o el tipo no coincide
     if (documentCache === null || type !== documentCache.type) {
         documentCache = await getDocumentIdByType(type);
     }
 
-    // Buscar el tipo de pago en la caché por nombre
+    // Normalizar los nombres para hacer la comparación
+    const normalizedHioposDocument = normalizeText(hioposDocument);
+
     const matchedDocument = documentCache.documents.find(
-        siigoDocument => siigoDocument.name.toLowerCase() === hioposDocument.toLowerCase()
+        (siigoDocument) => normalizeText(siigoDocument.name) === normalizedHioposDocument
     );
 
-    if(matchedDocument){
+    if (matchedDocument) {
         return {
             id: matchedDocument.id,
-            name: matchedDocument.name
-        }
-    }else {
+            name: matchedDocument.name,
+            cost_center_default: matchedDocument.cost_center_default,
+        };
+    } else {
         return {
             name: hioposDocument,
-            message: `El documento de compra "${hioposDocument}" no se encuentra registrado en Siigo.`
-        }
+            message: `El documento de compra "${hioposDocument}" no se encuentra registrado en Siigo.`,
+        };
     }
-
-}
+};
 
 const getCostCenters = async () => {
     try {
@@ -486,30 +560,42 @@ const getCostCenters = async () => {
 }
 
 export const matchCostCenter = async (hioposCostCenter) => {
+    // Función para normalizar texto eliminando tildes y otros diacríticos
+    const normalizeText = (text) =>
+        text?.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
-    if (costCenterCache === null){
-        costCenterCache = await getCostCenters()
+    // Obtener la caché si no está cargada
+    if (costCenterCache === null) {
+        costCenterCache = await getCostCenters();
     }
-    //console.log('Cetros de costo:', costCenterCache)
-    const matchedCenter = costCenterCache.find(siigoCenter => siigoCenter.name.toLowerCase() === hioposCostCenter.toLowerCase() );
 
-    if(matchedCenter){
+    // Normalizar el centro de costo de Hiopos para la comparación
+    const normalizedHioposCostCenter = normalizeText(hioposCostCenter);
+
+    // Buscar el centro de costo en la caché
+    const matchedCenter = costCenterCache.find(
+        (siigoCenter) => normalizeText(siigoCenter.name) === normalizedHioposCostCenter
+    );
+
+    if (matchedCenter) {
         return {
             id: matchedCenter.id,
-            name: matchedCenter.name
-        }
-    }else{
+            name: matchedCenter.name,
+        };
+    } else {
         return {
             name: hioposCostCenter,
-            message: `El centro de costo "${hioposCostCenter}" no se encuentra registrado en Siigo.`
-        }
+            message: `El centro de costo "${hioposCostCenter}" no se encuentra registrado en Siigo.`,
+        };
     }
-}
+};
 
 export const setItemDataForInvoice = async (item) => {
     try {
-        const taxes = await getTaxesByName(item.DetalleImpuesto); // Esperar el resultado
-        return  {
+        const taxName = item.DetalleImpuesto ?? item.Impuestos; // Usa el primer valor definido
+        const taxes = taxName ? await getTaxesByName(taxName) : []; // Asegura que siempre haya un array
+
+        return {
             type: 'Product',
             code: item.RefArticulo,
             description: item.Articulo,
@@ -517,9 +603,9 @@ export const setItemDataForInvoice = async (item) => {
             price: item.Precio,
             discount: item.Descuento,
             taxes,
-        }
-
+        };
     } catch (error) {
-        handleServiceError(error)
+        handleServiceError(error);
+        return null; // Retorna un valor manejable en caso de error
     }
-}
+};
