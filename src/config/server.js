@@ -4,7 +4,7 @@ import { routes } from '../routes/index.js';
 import { errorHandlerMiddleware } from '../middleware/index.js';
 import cors from 'cors';
 import { sequelize } from '../database/index.js';
-import { syncDb } from '../models/index.js';
+//import { syncDb } from '../models/index.js';
 import { startCronJobs } from './cron.config.js';
 
 
@@ -23,7 +23,7 @@ export default async () => {
     app.use(express.json({ limit: '20mb' }));
     app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
-    await syncDb().then(() => console.log('Tablas sincronizadas'));
+    //await syncDb().then(() => console.log('Tablas sincronizadas'));
 
     routes(app);
     app.use(errorHandlerMiddleware.errorHandler); // Manejador de errores
