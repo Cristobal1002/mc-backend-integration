@@ -4,7 +4,7 @@ import { routes } from '../routes/index.js';
 import { errorHandlerMiddleware } from '../middleware/index.js';
 import cors from 'cors';
 import { sequelize } from '../database/index.js';
-//import { syncDb } from '../models/index.js';
+import { syncDb } from '../models/index.js';
 import { startCronJobs } from './cron.config.js';
 
 

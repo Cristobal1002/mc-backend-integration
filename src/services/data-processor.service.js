@@ -206,8 +206,10 @@ export const purchaseValidator = async () => {
 
                     // Validación de artículos
                     const itemsValidationResults = [];
+
                     for (const item of DetalleDocumento) {
                         const siigoItem = await siigoService.getItemByCode(item.RefArticulo);
+
                         if (!siigoItem || siigoItem.results.length === 0) {
                             try {
                                 const createdItem = await siigoService.createSiigoItem(item);
@@ -226,23 +228,53 @@ export const purchaseValidator = async () => {
                                 details: siigoItem.results[0],
                             });
                         }
+
                         // Esperar entre solicitudes para no superar el límite de peticiones
                         await delay(rateLimitDelay);
                     }
 
+// Evaluar si hubo errores en la validación de artículos
                     const itemsStatus = itemsValidationResults.some(result => result.status === 'failed') ? 'failed' : 'success';
+
+// Guardar el estado de la validación de artículos en la base de datos
                     await model.TransactionModel.update({
                         items_validator_status: itemsStatus,
                         items_validator_details: itemsValidationResults,
                     }, { where: { id: currentInvoice.id } });
 
-                    // Actualizar si los artículos son correctos
+// **El proceso continúa, sin importar si hubo errores en artículos**
+
+// Si los artículos son correctos, preparar los datos para la factura en Siigo
                     let siigoItem = [];
+                    let taxValidationStatus = 'success';  // Inicializamos la validación como 'success'
+
                     if (itemsStatus === 'success') {
                         for (const item of DetalleDocumento) {
-                            siigoItem.push(await siigoService.setItemDataForInvoice(item));
+                            // Usamos el setSiigoInvoiceItem que ya tienes
+                            const itemResult = await siigoService.setItemDataForInvoice(item);
+
+                            // Comprobamos si el impuesto no se encontró
+                            if (itemResult.taxes.some(tax => tax.status === 'not_found')) {
+                                taxValidationStatus = 'failed';  // Marcamos como fallido si no se encuentra algún impuesto
+                                // Agregamos detalles del error de impuestos no encontrados
+                                itemResult.taxes.forEach(tax => {
+                                    if (tax.status === 'not_found') {
+                                        tax.details = `Impuesto no encontrado: ${tax.name}`;
+                                    }
+                                });
+                            }
+
+                            // Guardamos el artículo procesado
+                            siigoItem.push(itemResult);
                         }
                     }
+
+// Aquí guardamos el JSON real en el campo, no un string
+                    await model.TransactionModel.update({
+                        items_validator_status: taxValidationStatus,  // 'failed' o 'success'
+                        items_validator_details: siigoItem,  // Guardamos el objeto JSON directamente
+                    }, { where: { id: currentInvoice.id } });
+
 
                     // Validación de métodos de pago
                     const paymentsValidationResults = [];
@@ -329,7 +361,7 @@ export const purchaseValidator = async () => {
 const purchaseInvoiceSync = async () => {
     try {
         const invoices = await getInvoicesToCreation('purchases');
-        const rateLimitDelay = 300; // Delay entre peticiones
+        const rateLimitDelay = 500; // Delay entre peticiones
 
         for (const invoice of invoices) {
             try {
@@ -370,10 +402,12 @@ export const salesValidator = async () => {
                 const { MedioPago } = currentInvoice.hiopos_data
 
                 const invoiceData = {
+                    //todo: ver si el seller se deja aqui o en parametrizacion
                     date: currentInvoice.core_data.date,
                     observations: currentInvoice.core_data.observations,
                     discount_type: 'Percentage',
-                    tax_included: true
+                    number: currentInvoice.hiopos_data.Numero,
+                    seller: 936
                 };
 
                 try {
@@ -412,6 +446,7 @@ export const salesValidator = async () => {
                             cost_center_validator_details: {name: 'Cost Center by defaul', id: coce},
                         }, { where: { id: currentInvoice.id } });
                         invoiceData.cost_center = coce;
+                        delete invoiceData.document.cost_center_default
 
                     }else{
                       coce =   await siigoService.matchCostCenter(currentInvoice.hiopos_data.Almacen);
@@ -426,11 +461,9 @@ export const salesValidator = async () => {
                                 cost_center_validator_details: coce,
                             }, { where: { id: currentInvoice.id } });
                             invoiceData.cost_center = coce.id;
+                            delete invoiceData.document.cost_center_default
                         }
                     }
-
-
-
 
                     // Validación de clientes
                     const siigoContact = await siigoService.getContactsByIdentification(identification);
@@ -452,7 +485,12 @@ export const salesValidator = async () => {
                                 id: createdCustomer.id,
                                 identification: createdCustomer.identification,
                                 id_type: createdCustomer.id_type.code,
-                                person_type: createdCustomer.person_type
+                                person_type: createdCustomer.person_type,
+                                name: createdCustomer.name,
+                                address: createdCustomer.address,
+                                phones: createdCustomer.phones,
+                                contact: createdCustomer.contact,
+
                             };
                         } else {
                             await model.TransactionModel.update(
@@ -480,7 +518,11 @@ export const salesValidator = async () => {
                             id: siigoContact.results[0].id,
                             identification: siigoContact.results[0].identification,
                             id_type: siigoContact.results[0].id_type.code,
-                            person_type: siigoContact.results[0].person_type
+                            person_type: siigoContact.results[0].person_type,
+                            name:  siigoContact.results[0].name,
+                            address:  siigoContact.results[0].address,
+                            phones:  siigoContact.results[0].phones || [{number: "6012770000"}],
+                            contact: siigoContact.results[0].contact,
                         };
                     }
 
@@ -549,8 +591,8 @@ export const salesValidator = async () => {
                                     id: siigoMethod.id,
                                     name: siigoMethod.name,
                                     value: siigoMethod.value,
-                                    status: 'success',
-                                    details: [`Método de pago "${siigoMethod.name}" procesado correctamente.`],
+                                    //status: 'success',
+                                    //details: [`Método de pago "${siigoMethod.name}" procesado correctamente.`],
                                 });
                             }
                         } catch (error) {
@@ -621,7 +663,7 @@ export const salesValidator = async () => {
 const saleInvoiceSync = async () => {
     try {
         const invoices = await getInvoicesToCreation('sales');
-        const rateLimitDelay = 300; // Delay entre peticiones
+        const rateLimitDelay = 500; // Delay entre peticiones
 
         for (const invoice of invoices) {
             try {
@@ -654,7 +696,7 @@ const closeLote = async () => {
         // 2️⃣ Iterar sobre cada lote para revisar las transacciones asociadas
         for (const lote of openLotes) {
             const transactions = await model.TransactionModel.findAll({
-                where: { loteId: lote.id },
+                where: { lote_id: lote.id },
                 raw: true
             });
 

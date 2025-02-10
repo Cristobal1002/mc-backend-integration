@@ -274,13 +274,14 @@ const getTaxesByName = async (hioposTaxes) => {
 
     // Procesar impuestos de Hiopos
     const mappedTaxes = hioposTaxes.map(hioposTax => {
-        const taxName = (hioposTax.NombreImpuesto ?? hioposTax.Descripcion)?.trim(); // Elimina espacios extras
+        let taxName = (hioposTax.NombreImpuesto ?? hioposTax.Descripcion)?.trim(); // Elimina espacios extras
         const taxPercentage = hioposTax.PorcentajeImpuesto ?? hioposTax.Porcentaje;
 
         console.log('TAX NAME', taxName)
         if (!taxName) {
             return null; // Ignorar impuestos sin nombre o sin porcentaje
         }
+        if(taxName === 'EXENTOS'){taxName = 'IVA 0%'}
 
         // Normalizar nombres a minúsculas para comparación
         const normalizedTaxName = taxName.toLowerCase();
@@ -392,6 +393,8 @@ export const setVendorContactData = (contact) => {
     const person_type = supplier.Tipo_Documento_Fiscal === 'NIT' ? 'Company' : 'Person';
     const cleanedNif = supplier.Numero_De_Documento_Fiscal.replace(/[.,-]/g, '');
     const identification = person_type === 'Company'? cleanedNif.slice(0, 9) : cleanedNif;
+    const vat_responsible = supplier.Regimenes_fiscales === "Responsables de IVA"
+
 
     return {
         type: 'Supplier',
@@ -400,6 +403,7 @@ export const setVendorContactData = (contact) => {
         identification,
         name: formatSiigoName(isCompany ? "Company" : "Person", supplier.Proveedor),
         commercial_name: supplier.Nombre_Comercial || supplier.Proveedor,
+        vat_responsible,
         phone: supplier.Telefono,
         email: supplier.Email,
         /*address: {
