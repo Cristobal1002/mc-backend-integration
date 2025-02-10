@@ -26,12 +26,12 @@ const instance = new Sequelize(dbConfig.database, dbConfig.username, dbConfig.pa
         acquire: dbConfig.pool.acquire,
         idle: dbConfig.pool.idle
     },
-    /*dialectOptions: {
+    dialectOptions: {
         ssl: {
             require: false,
             rejectUnauthorized: false
         }
-    }*/
+    }
 });
 
 export const sequelize = instance;
