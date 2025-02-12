@@ -3,5 +3,5 @@ import {dataProcessorController} from "../controllers/index.js";
 
 export const dataProcessor =  express.Router();
 
-dataProcessor.post(`/manual-purchases`, dataProcessorController.testLote )
-dataProcessor.post(`/manual-sales`, dataProcessorController.testLote )
+dataProcessor.post(`/manual-purchases`, dataProcessorController.manualProcessingLote )
+dataProcessor.post(`/manual-sales`, dataProcessorController.manualProcessingLote )

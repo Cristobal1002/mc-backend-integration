@@ -2,7 +2,7 @@ import {hioposService, siigoService} from "./index.js";
 import {model} from "../models/index.js";
 import {createSaleInvoice, setItemDataForInvoice} from "./siigo.service.js";
 
-export const getHioposLote = async (type, filter) => {
+/*export const getHioposLote = async (type, filter) => {
     let lote
     try {
         //Crear el lote en la bd
@@ -19,9 +19,33 @@ export const getHioposLote = async (type, filter) => {
         await model.LoteModel.update({status: 'failed', error: error.data}, {where:{id: lote.id}})
         throw error; // Permite que el job sea reintentado
     }
+}; */
+
+export const getHioposLote = async (type, filter, isManual = false) => {
+    let lote;
+    try {
+        // Crear el lote en la BD
+        console.log('ISMANUAL', isManual)
+        lote = await model.LoteModel.create({ type, filter, source: isManual ? 'manual' : 'automatic' });
+        console.log(`[${isManual ? 'MANUAL' : 'CRON'}] LOTE CREADO:`, lote);
+
+        // Obtener datos de Hiopos
+        const getHioposData = await hioposService.getBridgeDataByType(type, filter);
+
+        // Procesar transacciones
+        const result = await processLoteTransactions(type, getHioposData.data, lote.dataValues);
+
+        console.log(`[${isManual ? 'MANUAL' : 'CRON'}] LOTE PROCESADO:`, result);
+        return {result}
+    } catch (error) {
+        console.error(`Error procesando lote:`, error);
+        await model.LoteModel.update({ status: 'failed', error: error.data }, { where: { id: lote.id } });
+        throw error;
+    }
 };
 
-export const processLoteTransactions = async (type, lote, loteHeader) => {
+// Cambios para evitar duplicados
+/* export const processLoteTransactions = async (type, lote, loteHeader) => {
     try {
         const loteId = loteHeader.id
         const savedTransactions = [];
@@ -61,10 +85,62 @@ export const processLoteTransactions = async (type, lote, loteHeader) => {
         console.error('[PROCESS LOTE TRANSACTIONS] Error procesando lote:', error);
         throw error;
     }
+}; */
+
+export const processLoteTransactions = async (type, lote, loteHeader) => {
+    try {
+        const loteId = loteHeader.id;
+        let processedCount = 0;
+        let omittedCount = 0;
+        let hasErrors = false; // Flag para saber si hubo errores
+
+        for (const invoice of lote) {
+            try {
+                if (
+                    (type === 'purchases' && invoice.TipoDocumento === "Factura compra") ||
+                    (type === 'sales' && invoice.TipoDocumento === "Factura venta electrónica")
+                ) {
+                    const coreData = type === 'purchases'
+                        ? await siigoService.setSiigoPurchaseInvoiceData([invoice])
+                        : await siigoService.setSiigoSalesInvoiceData([invoice]);
+
+                    const transaction = await registerTransaction(type, invoice, coreData[0], loteId);
+
+                    if (transaction) {
+                        processedCount++;
+                    } else {
+                        omittedCount++;
+                    }
+                }
+            } catch (error) {
+                console.error('[PROCESS TRANSACTION ERROR]', invoice, error);
+                hasErrors = true; // Si hay un error, marcamos la bandera
+            }
+        }
+
+        console.log(`[PROCESS LOTE] Procesadas: ${processedCount}, Omitidas: ${omittedCount}`);
+
+        // Actualizar la cantidad de transacciones en el lote
+        await model.LoteModel.update(
+            { transactions_count: processedCount, omitted_count: omittedCount },
+            { where: { id: loteId } }
+        );
+
+        // Si todas las transacciones se procesaron sin errores, iniciar la sincronización con Siigo
+        if (!hasErrors) {
+            console.log('[SINCRONIZANDO] Inicia proceso de sincronización con Siigo');
+            await syncDataProcess();
+        } else {
+            console.warn('[PROCESS LOTE] Algunas transacciones fallaron. Revisa antes de sincronizar.');
+        }
+
+        return { processed: processedCount, omitted: omittedCount };
+    } catch (error) {
+        console.error('[PROCESS LOTE TRANSACTIONS] Error procesando lote:', error);
+        throw error;
+    }
 };
-
-
-export const registerTransaction = async (type, hioposData, coreData, loteId) => {
+/* export const registerTransaction = async (type, hioposData, coreData, loteId) => {
     try {
         const documentNumber = hioposData.SerieNumero || hioposData['Serie/Numero'];
         const transaction = await model.TransactionModel.create({
@@ -76,6 +152,38 @@ export const registerTransaction = async (type, hioposData, coreData, loteId) =>
             siigo_response: null, // Vacío inicialmente
             status: 'validation' // Estado inicial
         });
+        return transaction;
+    } catch (error) {
+        console.error('[REGISTER TRANSACTION] Error al registrar transacción:', error);
+        throw error;
+    }
+}; */
+
+export const registerTransaction = async (type, hioposData, coreData, loteId) => {
+    try {
+        const documentNumber = hioposData.SerieNumero || hioposData['Serie/Numero'];
+
+        // Verificar si ya existe una transacción con este número de documento
+        const existingTransaction = await model.TransactionModel.findOne({
+            where: { document_number: documentNumber }
+        });
+
+        if (existingTransaction) {
+            console.warn(`[REGISTER TRANSACTION] Documento duplicado omitido: ${documentNumber}`);
+            return null; // Retorna null si es duplicado
+        }
+
+        // Crear nueva transacción
+        const transaction = await model.TransactionModel.create({
+            lote_id: loteId,
+            type,
+            document_number: documentNumber,
+            hiopos_data: hioposData,
+            core_data: coreData,
+            siigo_response: null,
+            status: 'validation'
+        });
+
         return transaction;
     } catch (error) {
         console.error('[REGISTER TRANSACTION] Error al registrar transacción:', error);

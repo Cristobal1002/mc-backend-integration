@@ -13,6 +13,11 @@ LoteModel.init({
         type: DataTypes.ENUM("purchases", "sales"), // Tipo de proceso: compras o ventas
         allowNull: false,
     },
+    source: {
+        type: DataTypes.ENUM('automatic', 'manual'),
+        allowNull: false,
+        defaultValue: 'automatic'
+    },
     filter: {
         type: DataTypes.JSONB, // Detalles del filtro
         allowNull: false,
