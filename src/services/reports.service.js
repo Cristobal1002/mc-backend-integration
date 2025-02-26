@@ -1,7 +1,7 @@
 import axios from "axios";
 import {CustomError, handleServiceError} from "../errors/index.js";
 import {model} from "../models/index.js";
-import {Op} from "sequelize";
+import {literal, Op} from "sequelize";
 
 export const getDailyStats = async () => {
     const todayStart = new Date();
@@ -103,3 +103,61 @@ export async function getPaginatedTransactions(page = 1, limit = 10, startDate, 
         throw new Error("Error obteniendo transacciones");
     }
 }
+
+export const getProcessedLotes = async ({
+                                     date = new Date(),
+                                     source = null, // "automatic" o "manual"
+                                     page = 1,
+                                     limit = 10
+                                 }) => {
+    const startDate = new Date(date);
+    startDate.setHours(0, 0, 0, 0);
+
+    const endDate = new Date(date);
+    endDate.setHours(23, 59, 59, 999);
+
+    const filters = {
+        processed_at: { [Op.between]: [startDate, endDate] }
+    };
+
+    if (source) {
+        filters.source = source;
+    }
+
+    const { count, rows } = await model.LoteModel.findAndCountAll({
+        where: filters,
+        attributes: [
+            "id",
+            "type",
+            "source",
+            "filter",
+            "status",
+            "error",
+            "processed_at",
+            "transactions_count",
+            [literal(`(
+                SELECT COUNT(*) 
+                FROM transactions 
+                WHERE transactions.lote_id = LoteModel.id 
+                AND transactions.status = 'success'
+            )`), "successful_transactions"],
+            [literal(`(
+                SELECT COUNT(*) 
+                FROM transactions 
+                WHERE transactions.lote_id = LoteModel.id 
+                AND transactions.status = 'failed'
+            )`), "failed_transactions"]
+        ],
+        limit,
+        offset: (page - 1) * limit,
+        order: [["processed_at", "DESC"]] // Ordenamos por fecha procesada, más recientes primero
+    });
+
+    return { data:{
+            lotes: rows,
+            total: count,
+            pages: Math.ceil(count / limit),
+            currentPage: page
+        }
+    };
+};

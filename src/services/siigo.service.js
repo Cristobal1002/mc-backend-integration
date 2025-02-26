@@ -604,7 +604,7 @@ export const setItemDataForInvoice = async (item) => {
             code: item.RefArticulo,
             description: item.Articulo,
             quantity: item.Unidades,
-            price: item.Precio,
+            price: item.Base,
             discount: item.Descuento,
             taxes,
         };

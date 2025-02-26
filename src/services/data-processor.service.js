@@ -193,9 +193,9 @@ export const registerTransaction = async (type, hioposData, coreData, loteId) =>
 
 export const syncDataProcess= async () => {
     try {
-        await purchaseValidator();
-        await purchaseInvoiceSync();
-        await salesValidator();
+        //await purchaseValidator();
+        //await purchaseInvoiceSync();
+        //await salesValidator();
         await saleInvoiceSync();
         await closeLote();
     } catch (error) {
@@ -247,7 +247,7 @@ export const purchaseValidator = async () => {
                 const { DetalleMediosdepago } = currentInvoice.hiopos_data;
 
                 const invoiceData = {
-                    date: currentInvoice.core_data.date,
+                    date: currentInvoice.hiopos_data.Fecha,
                     provider_invoice: currentInvoice.core_data.provider_invoice,
                     observations: currentInvoice.core_data.observations,
                     discount_type: 'Percentage',
@@ -511,7 +511,7 @@ export const salesValidator = async () => {
 
                 const invoiceData = {
                     //todo: ver si el seller se deja aqui o en parametrizacion
-                    date: currentInvoice.core_data.date,
+                    date: currentInvoice.hiopos_data.Fecha,
                     observations: currentInvoice.core_data.observations,
                     discount_type: 'Percentage',
                     number: currentInvoice.hiopos_data.Numero,
