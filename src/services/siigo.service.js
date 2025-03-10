@@ -594,7 +594,7 @@ export const matchCostCenter = async (hioposCostCenter) => {
     }
 };
 
-export const setItemDataForInvoice = async (item) => {
+export const setItemDataForInvoice = async (item, type) => {
     try {
         const taxName = item.DetalleImpuesto ?? item.Impuestos; // Usa el primer valor definido
         const taxes = taxName ? await getTaxesByName(taxName) : []; // Asegura que siempre haya un array
@@ -604,7 +604,7 @@ export const setItemDataForInvoice = async (item) => {
             code: item.RefArticulo,
             description: item.Articulo,
             quantity: item.Unidades,
-            price: item.Base,
+            price: type === 'sales' ? item.Base : item.Precio, // Condición según el tipo
             discount: item.Descuento,
             taxes,
         };

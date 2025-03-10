@@ -13,8 +13,8 @@ export const getDailyStats = async (req, res, next) => {
 
 export const getPaginatedTransactions = async (req, res, next) => {
     try {
-        const {page, limit} = req.query
-        const response = await reportsService.getPaginatedTransactions(page, limit);
+        const {page, limit, batchId} = req.query
+        const response = await reportsService.getPaginatedTransactions({page, limit, batchId});
         standardResponse(res,200, '', response.data )
     } catch (error) {
         return next(error)
@@ -24,8 +24,8 @@ export const getPaginatedTransactions = async (req, res, next) => {
 export const getPaginatedLotes = async (req, res, next) =>{
 
     try {
-        const {date, source, page, limit} = req.query
-        const response = await reportsService.getProcessedLotes({date, source,page,limit});
+        const {startDate, endDate, source, page, limit} = req.query
+        const response = await reportsService.getProcessedLotes({startDate, endDate, source,page,limit});
         standardResponse(res,200, '', response.data )
     } catch (error) {
         return next(error)

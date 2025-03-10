@@ -63,40 +63,46 @@ export const getDailyStats = async () => {
     }
 }
 
-export async function getPaginatedTransactions(page = 1, limit = 10, startDate, endDate) {
+    export async function getPaginatedTransactions({page = 1, limit = 10, startDate, endDate, batchId}) {
     try {
-        // Si no se pasan fechas, se usa el rango de hoy
-        const todayStart = new Date();
-        todayStart.setHours(0, 0, 0, 0);
+        const whereCondition = {};
 
-        const todayEnd = new Date();
-        todayEnd.setHours(23, 59, 59, 999);
+        if (batchId) {
+            // Si batchId está presente, solo filtrar por batchId y omitir fechas
+            whereCondition.lote_id = batchId;
+        } else {
+            // Si no hay batchId, aplicar filtro por fechas
+            const todayStart = new Date();
+            todayStart.setHours(0, 0, 0, 0);
 
-        const start = startDate ? new Date(startDate) : todayStart;
-        const end = endDate ? new Date(endDate) : todayEnd;
+            const todayEnd = new Date();
+            todayEnd.setHours(23, 59, 59, 999);
+
+            const start = startDate && !isNaN(new Date(startDate)) ? new Date(startDate) : todayStart;
+            const end = endDate && !isNaN(new Date(endDate)) ? new Date(endDate) : todayEnd;
+
+            whereCondition.createdAt = {
+                [Op.between]: [start, end]
+            };
+        }
 
         const offset = (page - 1) * limit;
 
-        // Obtener transacciones paginadas dentro del rango de fechas
         const { rows: data, count: total } = await model.TransactionModel.findAndCountAll({
-            where: {
-                createdAt: {
-                    [Op.between]: [start, end]
-                }
-            },
+            where: whereCondition,
             limit,
             offset,
-            order: [["createdAt", "DESC"]], // Ordenar por fecha de creación descendente
+            order: [["createdAt", "DESC"]],
         });
 
-        return {data:{
-                transactions:data,
+        return {
+            data: {
+                transactions: data,
                 total,
                 pages: Math.ceil(total / limit),
-                currentPage: page,
-                startDate: start.toISOString(),
-                endDate: end.toISOString()
-            }};
+                currentPage: page
+            }
+        };
 
     } catch (error) {
         console.error("Error obteniendo transacciones paginadas:", error);
@@ -104,20 +110,23 @@ export async function getPaginatedTransactions(page = 1, limit = 10, startDate, 
     }
 }
 
-export const getProcessedLotes = async ({
-                                     date = new Date(),
-                                     source = null, // "automatic" o "manual"
-                                     page = 1,
-                                     limit = 10
-                                 }) => {
-    const startDate = new Date(date);
-    startDate.setHours(0, 0, 0, 0);
 
-    const endDate = new Date(date);
-    endDate.setHours(23, 59, 59, 999);
+export const getProcessedLotes = async ({
+                                            startDate = null,
+                                            endDate = null,
+                                            source = null, // "automatic" o "manual"
+                                            page = 1,
+                                            limit = 10
+                                        }) => {
+    // Si no se pasan fechas, toma el día actual por defecto
+    const start = startDate ? new Date(startDate) : new Date();
+    start.setHours(0, 0, 0, 0);
+
+    const end = endDate ? new Date(endDate) : new Date();
+    end.setHours(23, 59, 59, 999);
 
     const filters = {
-        processed_at: { [Op.between]: [startDate, endDate] }
+        processed_at: { [Op.between]: [start, end] }
     };
 
     if (source) {
@@ -135,25 +144,30 @@ export const getProcessedLotes = async ({
             "error",
             "processed_at",
             "transactions_count",
+            [literal(`"filter"->>'startDate'`), "processed_date"],
+            [literal(`(
+                SELECT jsonb_path_query_first("filter"::jsonb, '$.filters[*].value') #>> '{}'
+            )`), "processed_time"],
             [literal(`(
                 SELECT COUNT(*) 
                 FROM transactions 
-                WHERE transactions.lote_id = LoteModel.id 
+                WHERE transactions.lote_id = "LoteModel".id 
                 AND transactions.status = 'success'
             )`), "successful_transactions"],
             [literal(`(
                 SELECT COUNT(*) 
                 FROM transactions 
-                WHERE transactions.lote_id = LoteModel.id 
+                WHERE transactions.lote_id = "LoteModel".id 
                 AND transactions.status = 'failed'
             )`), "failed_transactions"]
         ],
         limit,
         offset: (page - 1) * limit,
-        order: [["processed_at", "DESC"]] // Ordenamos por fecha procesada, más recientes primero
+        order: [["processed_at", "DESC"]]
     });
 
-    return { data:{
+    return {
+        data: {
             lotes: rows,
             total: count,
             pages: Math.ceil(count / limit),

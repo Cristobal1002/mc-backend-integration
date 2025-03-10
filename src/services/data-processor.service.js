@@ -1,5 +1,6 @@
 import {hioposService, siigoService} from "./index.js";
 import {model} from "../models/index.js";
+import {DateTime} from "luxon";
 import {createSaleInvoice, setItemDataForInvoice} from "./siigo.service.js";
 
 /*export const getHioposLote = async (type, filter) => {
@@ -193,9 +194,9 @@ export const registerTransaction = async (type, hioposData, coreData, loteId) =>
 
 export const syncDataProcess= async () => {
     try {
-        //await purchaseValidator();
-        //await purchaseInvoiceSync();
-        //await salesValidator();
+        await purchaseValidator();
+        await purchaseInvoiceSync();
+        await salesValidator();
         await saleInvoiceSync();
         await closeLote();
     } catch (error) {
@@ -247,7 +248,7 @@ export const purchaseValidator = async () => {
                 const { DetalleMediosdepago } = currentInvoice.hiopos_data;
 
                 const invoiceData = {
-                    date: currentInvoice.hiopos_data.Fecha,
+                    date: DateTime.fromFormat(currentInvoice.hiopos_data.Fecha, "dd/MM/yyyy").toFormat("yyyy-MM-dd"),
                     provider_invoice: currentInvoice.core_data.provider_invoice,
                     observations: currentInvoice.core_data.observations,
                     discount_type: 'Percentage',
@@ -359,7 +360,7 @@ export const purchaseValidator = async () => {
                     if (itemsStatus === 'success') {
                         for (const item of DetalleDocumento) {
                             // Usamos el setSiigoInvoiceItem que ya tienes
-                            const itemResult = await siigoService.setItemDataForInvoice(item);
+                            const itemResult = await siigoService.setItemDataForInvoice(item, currentInvoice.type);
 
                             // Comprobamos si el impuesto no se encontró
                             if (itemResult.taxes.some(tax => tax.status === 'not_found')) {
