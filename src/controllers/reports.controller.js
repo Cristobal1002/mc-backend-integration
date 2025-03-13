@@ -1,6 +1,5 @@
 import {standardResponse, standardErrorResponse, validationErrorResponse, unauthorizedResponse} from "../utils/response-formatter.utils.js";
 import {reportsService} from "../services/index.js";
-import {getProcessedLotes} from "../services/reports.service.js";
 
 export const getDailyStats = async (req, res, next) => {
     try {
