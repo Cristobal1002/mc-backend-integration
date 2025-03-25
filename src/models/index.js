@@ -7,7 +7,7 @@ TransactionModel.belongsTo(LoteModel,{foreignKey: 'lote_id'})
 export const syncDb = async () => {
     await LoteModel.sync({alter: true })
     await TransactionModel.sync({alter: true})
-    await ParametrizationModel.sync({alter:true, force:true})
+    await ParametrizationModel.sync({alter:true})
 }
 export const model = {
     LoteModel,

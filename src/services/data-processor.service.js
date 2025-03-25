@@ -1,4 +1,4 @@
-import {hioposService, siigoService} from "./index.js";
+import {hioposService, parametrizationService, siigoService} from "./index.js";
 import {model} from "../models/index.js";
 import {DateTime} from "luxon";
 import {createSaleInvoice, setItemDataForInvoice} from "./siigo.service.js";
@@ -97,13 +97,14 @@ export const processLoteTransactions = async (type, lote, loteHeader) => {
 
         for (const invoice of lote) {
             try {
+                const params = await parametrizationService.getParametrizationData()
                 if (
                     (type === 'purchases' && invoice.TipoDocumento === "Factura compra") ||
                     (type === 'sales' && invoice.TipoDocumento === "Factura venta electrónica")
                 ) {
                     const coreData = type === 'purchases'
-                        ? await siigoService.setSiigoPurchaseInvoiceData([invoice])
-                        : await siigoService.setSiigoSalesInvoiceData([invoice]);
+                        ? await siigoService.setSiigoPurchaseInvoiceData([invoice], params)
+                        : await siigoService.setSiigoSalesInvoiceData([invoice], params);
 
                     const transaction = await registerTransaction(type, invoice, coreData[0], loteId);
 
@@ -182,7 +183,9 @@ export const registerTransaction = async (type, hioposData, coreData, loteId) =>
             hiopos_data: hioposData,
             core_data: coreData,
             siigo_response: null,
-            status: 'validation'
+            status: 'validation',
+            amount: coreData.amount
+
         });
 
         return transaction;
@@ -390,6 +393,12 @@ export const purchaseValidator = async () => {
                     for (const payment of DetalleMediosdepago) {
                         try {
                             const siigoMethod = await siigoService.getPaymentsByName('FC', payment);
+
+                            // Obtener la configuración desde params
+                            const params = await parametrizationService.getParametrizationData();
+                            const purchaseParam = params.data.find(param => param.type === 'purchases');
+                            const calculatePayment = purchaseParam ? purchaseParam.calculate_payment : false;
+
                             if (!siigoMethod || !siigoMethod.id) {
                                 paymentsValidationResults.push({
                                     id: null,
@@ -402,7 +411,7 @@ export const purchaseValidator = async () => {
                                 paymentsValidationResults.push({
                                     id: siigoMethod.id,
                                     name: siigoMethod.name,
-                                    value: payment.Importe,
+                                    value: calculatePayment ? currentInvoice.amount : payment.Importe, // Usa currentInvoice.amount si calculatePayment es true
                                     status: 'success',
                                     details: [`Método de pago "${siigoMethod.name}" procesado correctamente.`],
                                 });

@@ -150,15 +150,36 @@ const parseProviderInvoice = (input) => {
     };
 };
 
-export const setSiigoPurchaseInvoiceData = async (data) => {
+export const setSiigoPurchaseInvoiceData = async (data, params) => {
     console.log('[FACTURAS DE COMPRA]', data);
+
+    // Obtener el objeto con type = 'purchases' de params
+    const purchaseParam = params.data.find(param => param.type === 'purchases');
+    const calculatePayment = purchaseParam ? purchaseParam.calculate_payment : false;
+
     return data.map(invoice => {
-        let providerInvoice
+        let providerInvoice;
         try {
             providerInvoice = parseProviderInvoice(invoice.SudocProv); // Intenta parsear SudocProv
         } catch (error) {
             console.error(`Error procesando SudocProv: ${invoice.SudocProv}. Usando valores por defecto.`);
         }
+
+        // Calcular amount sin impuestos, redondeado a 2 decimales
+        let amount = invoice.DetalleDocumento.reduce((sum, item) => sum + (item.Precio * item.Unidades), 0).toFixed(2);
+
+        /*
+        // Cálculo de amount incluyendo impuestos (comentado para uso futuro)
+        if (calculatePayment) {
+            amount = invoice.DetalleDocumento.reduce((sum, item) => {
+                const basePrice = item.Precio * item.Unidades; // Precio antes de impuestos
+                const totalTax = item.DetalleImpuesto.reduce((taxSum, tax) => {
+                    return taxSum + (basePrice * (parseFloat(tax.PorcentajeImpuesto) / 100));
+                }, 0);
+                return sum + basePrice + totalTax;
+            }, 0).toFixed(2);
+        }
+        */
 
         return {
             date: DateTime.now().toISODate(),
@@ -183,12 +204,13 @@ export const setSiigoPurchaseInvoiceData = async (data) => {
             payments: invoice.DetalleMediosdepago.map(payment => ({
                 id: payment.MedioPago,
                 value: payment.Importe
-            }))
+            })),
+            amount
         };
     });
 };
 
-export const setSiigoSalesInvoiceData = async (data) => {
+export const setSiigoSalesInvoiceData = async (data, params) => {
     return data.map(invoice => ({
         date: DateTime.now().toISODate(),
         document: {

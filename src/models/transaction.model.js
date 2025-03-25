@@ -91,6 +91,11 @@ TransactionModel.init({
     },
     status: {
         type: DataTypes.ENUM('success', 'failed', 'validation', 'to-invoice')
+    },
+    amount:{
+        type: DataTypes.FLOAT,
+        allowNull: false,
+        defaultValue: 0
     }
 },{
     sequelize,

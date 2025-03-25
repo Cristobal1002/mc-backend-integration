@@ -63,15 +63,16 @@ export const getDailyStats = async () => {
     }
 }
 
-    export async function getPaginatedTransactions({page = 1, limit = 10, startDate, endDate, batchId}) {
+export async function getPaginatedTransactions({ page = 1, limit = 10, startDate, endDate, batchId, status, type }) {
     try {
         const whereCondition = {};
 
-        if (batchId) {
-            // Si batchId está presente, solo filtrar por batchId y omitir fechas
-            whereCondition.lote_id = batchId;
-        } else {
-            // Si no hay batchId, aplicar filtro por fechas
+        if (batchId) whereCondition.lote_id = batchId;
+        if (status) whereCondition.status = status;
+        if (type) whereCondition.type = type;
+
+        // Siempre aplicar filtro de fecha si viene startDate o endDate
+        if (startDate || endDate) {
             const todayStart = new Date();
             todayStart.setHours(0, 0, 0, 0);
 
@@ -93,11 +94,18 @@ export const getDailyStats = async () => {
             limit,
             offset,
             order: [["createdAt", "DESC"]],
+            raw: true // Retorna los datos como objetos planos
         });
+
+        // Agregar siigo_document con el name de siigo_response si existe
+        const transactions = data.map(transaction => ({
+            ...transaction,
+            siigo_document: transaction.siigo_response ? transaction.siigo_response.name || null : null
+        }));
 
         return {
             data: {
-                transactions: data,
+                transactions,
                 total,
                 pages: Math.ceil(total / limit),
                 currentPage: page
@@ -108,10 +116,7 @@ export const getDailyStats = async () => {
         console.error("Error obteniendo transacciones paginadas:", error);
         throw new Error("Error obteniendo transacciones");
     }
-}
-
-
-export const getProcessedLotes = async ({
+}export const getProcessedLotes = async ({
                                             startDate = null,
                                             endDate = null,
                                             source = null, // "automatic" o "manual"

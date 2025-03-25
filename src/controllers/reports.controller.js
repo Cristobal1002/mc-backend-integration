@@ -12,8 +12,8 @@ export const getDailyStats = async (req, res, next) => {
 
 export const getPaginatedTransactions = async (req, res, next) => {
     try {
-        const {page, limit, batchId} = req.query
-        const response = await reportsService.getPaginatedTransactions({page, limit, batchId});
+        const {page, limit, startDate, endDate, batchId, status, type} = req.query
+        const response = await reportsService.getPaginatedTransactions({page, limit, startDate, endDate, batchId, status, type});
         standardResponse(res,200, '', response.data )
     } catch (error) {
         return next(error)
