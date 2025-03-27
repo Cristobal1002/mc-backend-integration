@@ -72,15 +72,11 @@ export async function getPaginatedTransactions({ page = 1, limit = 10, startDate
         if (type) whereCondition.type = type;
 
         // Siempre aplicar filtro de fecha si viene startDate o endDate
+        const timeZoneOffset = 5 * 60 * 60 * 1000; // UTC-5 en milisegundos
+
         if (startDate || endDate) {
-            const todayStart = new Date();
-            todayStart.setHours(0, 0, 0, 0);
-
-            const todayEnd = new Date();
-            todayEnd.setHours(23, 59, 59, 999);
-
-            const start = startDate && !isNaN(new Date(startDate)) ? new Date(startDate) : todayStart;
-            const end = endDate && !isNaN(new Date(endDate)) ? new Date(endDate) : todayEnd;
+            const start = startDate ? new Date(new Date(`${startDate}T00:00:00.000Z`).getTime() + timeZoneOffset) : new Date();
+            const end = endDate ? new Date(new Date(`${endDate}T23:59:59.999Z`).getTime() + timeZoneOffset) : new Date();
 
             whereCondition.createdAt = {
                 [Op.between]: [start, end]
@@ -116,7 +112,8 @@ export async function getPaginatedTransactions({ page = 1, limit = 10, startDate
         console.error("Error obteniendo transacciones paginadas:", error);
         throw new Error("Error obteniendo transacciones");
     }
-}export const getProcessedLotes = async ({
+}
+export const getProcessedLotes = async ({
                                             startDate = null,
                                             endDate = null,
                                             source = null, // "automatic" o "manual"
