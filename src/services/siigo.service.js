@@ -139,15 +139,16 @@ export const getItemByCode = async (code) => {
 
 
 const parseProviderInvoice = (input) => {
-    const match = input.match(/^([a-zA-Z]+)(\d+)$/);
+    const match = input.match(/^([a-zA-Z0-9]*?)(\d+)$/);
+
     if (!match) {
-        throw new Error('El formato del campo SudocProv no es válido');
+        return { prefix: input, number: 1 }; // Caso alfanumérico en el número
     }
 
-    return {
-        prefix: match[1], // Captura las letras iniciales
-        number: parseInt(match[2], 10) // Convierte los números en un entero
-    };
+    const prefix = match[1] || "FC"; // Si no hay prefijo, se usa "FC"
+    const number = parseInt(match[2], 10); // Convertimos el número a entero
+
+    return { prefix, number };
 };
 
 export const setSiigoPurchaseInvoiceData = async (data, params) => {
@@ -156,6 +157,7 @@ export const setSiigoPurchaseInvoiceData = async (data, params) => {
     // Obtener el objeto con type = 'purchases' de params
     const purchaseParam = params.data.find(param => param.type === 'purchases');
     const calculatePayment = purchaseParam ? purchaseParam.calculate_payment : false;
+    const taxesInCalculation = purchaseParam ? purchaseParam.tax_included_in_calculation : false;
 
     return data.map(invoice => {
         let providerInvoice;
@@ -165,8 +167,20 @@ export const setSiigoPurchaseInvoiceData = async (data, params) => {
             console.error(`Error procesando SudocProv: ${invoice.SudocProv}. Usando valores por defecto.`);
         }
 
-        // Calcular amount sin impuestos, redondeado a 2 decimales
-        let amount = invoice.DetalleDocumento.reduce((sum, item) => sum + (item.Precio * item.Unidades), 0).toFixed(2);
+        // Calcular amount dependiendo de la parametrización, redondeado a 2 decimales
+        let amount
+        if(calculatePayment && taxesInCalculation){
+            amount = invoice.DetalleDocumento.reduce((sum, item) => sum + (item.Precio * item.Unidades), 0).toFixed(2);
+        } else {
+            amount = invoice.DetalleDocumento.reduce((sum, item) => {
+                const basePrice = item.Precio * item.Unidades; // Precio antes de impuestos
+                const totalTax = item.DetalleImpuesto.reduce((taxSum, tax) => {
+                    return taxSum + (basePrice * (parseFloat(tax.PorcentajeImpuesto) / 100));
+                }, 0);
+                return sum + basePrice + totalTax;
+            }, 0).toFixed(2);
+        }
+
 
         /*
         // Cálculo de amount incluyendo impuestos (comentado para uso futuro)
@@ -616,7 +630,7 @@ export const matchCostCenter = async (hioposCostCenter) => {
     }
 };
 
-export const setItemDataForInvoice = async (item, type) => {
+/*export const setItemDataForInvoice = async (item, type) => {
     try {
         const taxName = item.DetalleImpuesto ?? item.Impuestos; // Usa el primer valor definido
         const taxes = taxName ? await getTaxesByName(taxName) : []; // Asegura que siempre haya un array
@@ -627,6 +641,32 @@ export const setItemDataForInvoice = async (item, type) => {
             description: item.Articulo,
             quantity: item.Unidades,
             price: type === 'sales' ? item.Base : item.Precio, // Condición según el tipo
+            discount: item.Descuento,
+            taxes,
+        };
+    } catch (error) {
+        handleServiceError(error);
+        return null; // Retorna un valor manejable en caso de error
+    }
+};*/
+
+export const setItemDataForInvoice = async (item, type) => {
+    try {
+        const taxName = item.DetalleImpuesto ?? item.Impuestos; // Usa el primer valor definido
+        const taxes = taxName ? await getTaxesByName(taxName) : []; // Asegura que siempre haya un array
+        const price = type === 'sales' ? item.Base_unitaria : item.Precio; // Usa Base en ventas, Precio en otros casos
+
+        // Si el precio es 0 en ventas, omitir el artículo
+        if (type === 'sales' && price === 0) {
+            return null;
+        }
+
+        return {
+            type: 'Product',
+            code: item.RefArticulo,
+            description: item.Articulo,
+            quantity: item.Unidades,
+            price,
             discount: item.Descuento,
             taxes,
         };

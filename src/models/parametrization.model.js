@@ -18,7 +18,7 @@ ParametrizationModel.init({
         allowNull: false,
         defaultValue: false
     },
-    tax_included: {
+    tax_included_in_calculation: {
         type: DataTypes.BOOLEAN,
         allowNull: false,
         defaultValue: false

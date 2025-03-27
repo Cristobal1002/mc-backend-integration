@@ -200,7 +200,7 @@ export const syncDataProcess= async () => {
         await purchaseValidator();
         await purchaseInvoiceSync();
         await salesValidator();
-        await saleInvoiceSync();
+        //await saleInvoiceSync();
         await closeLote();
     } catch (error) {
         console.error('Error al sincronizar con Siigo:', error);
@@ -687,7 +687,10 @@ export const salesValidator = async () => {
                     let siigoItem = [];
                     if (itemsStatus === 'success') {
                         for (const item of DetalleDocumento) {
-                            siigoItem.push(await siigoService.setItemDataForInvoice(item));
+                            const formattedItem = await siigoService.setItemDataForInvoice(item, 'sales');
+                            if (formattedItem) { // Solo agregar si no es null
+                                siigoItem.push(formattedItem);
+                            }
                         }
                     }
 
