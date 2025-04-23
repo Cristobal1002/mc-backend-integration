@@ -33,6 +33,6 @@ export default async () => {
     });
 
     // Iniciar el cron
-    //startCronJobs(); // Iniciar tareas programadas
+    startCronJobs(); // Iniciar tareas programadas
 
 };

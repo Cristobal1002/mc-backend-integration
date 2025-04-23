@@ -1,6 +1,7 @@
 import axios from "axios";
 import {CustomError, handleServiceError} from "../errors/index.js";
 import {DateTime} from "luxon";
+import {model} from "../models/index.js";
 
 const SIIGO_BASE_URL = process.env.SIIGO_BASE_URL
 const SIIGO_SERVICES_BASE_URL= 'https://services.siigo.com'
@@ -13,11 +14,75 @@ let cachedSiigoToken = null;
 let tokenExpirationTime = null;
 let isFetchingToken = false; // Variable para manejar el bloqueo
 let tokenPromise = null; // Promesa compartida durante la obtención del token
-let taxCache = []; //Cache para no consultar siempre los impuestos
-let paymentsCache = null //Cache pa medios de pago de siigo
-let documentCache = null
-let costCenterCache = null
-let inventoryGroupsCache = null
+
+// ======= Caché con expiración para múltiples recursos =======
+
+let taxCache = null;
+let taxCacheExpiration = null;
+
+let paymentsCache = {}; // por tipo
+let paymentsCacheExpiration = {};
+
+let documentCache = {}; // por tipo
+let documentCacheExpiration = {};
+
+let costCenterCache = null;
+let costCenterCacheExpiration = null;
+
+let inventoryGroupsCache = null;
+let inventoryGroupsCacheExpiration = null;
+
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutos
+
+// ======= Helpers de caché =======
+
+const getTaxesWithCache = async () => {
+    const now = Date.now();
+    if (!taxCache || !taxCacheExpiration || now > taxCacheExpiration) {
+        taxCache = await getTaxes();
+        taxCacheExpiration = now + CACHE_TTL_MS;
+    }
+    return taxCache;
+};
+
+const getPaymentMethodsWithCache = async (type) => {
+    const now = Date.now();
+    if (!paymentsCache[type] || now > (paymentsCacheExpiration[type] || 0)) {
+        paymentsCache[type] = await getSiigoPaymentMethods(type);
+        paymentsCacheExpiration[type] = now + CACHE_TTL_MS;
+    }
+    return paymentsCache[type];
+};
+
+const getDocumentTypesWithCache = async (type) => {
+    const now = Date.now();
+    if (!documentCache[type] || now > (documentCacheExpiration[type] || 0)) {
+        documentCache[type] = await getDocumentIdByType(type);
+        documentCacheExpiration[type] = now + CACHE_TTL_MS;
+    }
+    return documentCache[type];
+};
+
+const getCostCentersWithCache = async () => {
+    const now = Date.now();
+    if (!costCenterCache || now > costCenterCacheExpiration) {
+        costCenterCache = await getCostCenters();
+        costCenterCacheExpiration = now + CACHE_TTL_MS;
+    }
+    return costCenterCache;
+};
+
+export const getInventoryGroupsWithCache = async () => {
+    const now = Date.now();
+    if (!inventoryGroupsCache || now > inventoryGroupsCacheExpiration) {
+        console.log('Cache de grupos de inventario expirada o no inicializada. Consultando a Siigo...');
+        inventoryGroupsCache = await getInvetoryGroups();
+        inventoryGroupsCacheExpiration = now + CACHE_TTL_MS;
+    } else {
+        console.log('Usando cache de grupos de inventario');
+    }
+    return inventoryGroupsCache;
+};
 
 // Obtener token desde cache en memoria o generar uno nuevo
 export const getSiigoToken = async () => {
@@ -130,6 +195,7 @@ export const getItemByCode = async (code) => {
         const options = await   getSiigoHeadersOptions()
         const url = `${SIIGO_BASE_URL}/v1/products?code=${code}`
         const response = await axios.get(url,options)
+        console.log('Get item by code', response.data )
         return response.data
     } catch (error) {
         console.error(error)
@@ -250,14 +316,10 @@ export const setItemCreationData = async (item) => {
     try {
         const taxes = await getTaxesByName(item.DetalleImpuesto || item.Impuestos); // Esperar el resultado
         // Obtener los grupos de cuentas
-        let inventoryGroups
-        if(inventoryGroupsCache === null){
-            inventoryGroups = await getInvetoryGroups();
-        }else{
-            inventoryGroups = inventoryGroupsCache
-        }
+        const inventoryGroups = await getInventoryGroupsWithCache();
 
-        //console.log('GRUPOS DE INVENTARIO', inventoryGroups)
+
+        console.log('GRUPOS DE INVENTARIO', inventoryGroups)
 
         // Buscar el grupo de cuentas que coincide con el nombre
         // Convertir tanto el nombre de la familia de Hiopos como el de Siigo a minúsculas
@@ -267,7 +329,10 @@ export const setItemCreationData = async (item) => {
 
 
         // Si se encuentra el grupo de cuentas, obtener su id
-        const accountGroupId = accountGroup ? accountGroup.id : 'Producto';
+        // Si no encuentra un grupo exacto, intenta buscar uno llamado "Productos"
+        const fallbackGroup = inventoryGroups.find(group => group.name.toLowerCase() === 'productos');
+        const accountGroupId = accountGroup?.id || fallbackGroup?.id || null;
+
         return  {
             code: item.RefArticulo,
             account_group: accountGroupId, //Revisarlo porque no se sabe de donde tomarlo
@@ -282,7 +347,7 @@ export const setItemCreationData = async (item) => {
                     price_list: [
                         {
                             "position": 1,
-                            "value": item.Precio
+                            "value": Number(item.Precio.toFixed(2))
                         }
                     ]
                 }
@@ -302,27 +367,19 @@ export const setItemInvoiceData = async (item) => {
 
     }
 }
-const getTaxesByName = async (hioposTaxes) => {
-    // Cargar impuestos en caché si no están cargados
-    if (taxCache.length === 0) {
-        taxCache = await getTaxes(); // Consultar todos los impuestos una vez
-    }
+export const getTaxesByName = async (hioposTaxes) => {
+    const taxList = await getTaxesWithCache();
 
-    // Procesar impuestos de Hiopos
-    const mappedTaxes = hioposTaxes.map(hioposTax => {
-        let taxName = (hioposTax.NombreImpuesto ?? hioposTax.Descripcion)?.trim(); // Elimina espacios extras
+    return hioposTaxes.map(hioposTax => {
+        const rawName = [hioposTax.NombreImpuesto, hioposTax.Descripcion, hioposTax.NombreRetencion]
+            .find(name => typeof name === 'string' && name.trim().length > 0);
+
+        let taxName = rawName?.trim();
         const taxPercentage = hioposTax.PorcentajeImpuesto ?? hioposTax.Porcentaje;
-
-        console.log('TAX NAME', taxName)
-        if (!taxName) {
-            return null; // Ignorar impuestos sin nombre o sin porcentaje
-        }
-        if(taxName === 'EXENTOS'){taxName = 'IVA 0%'}
-
-        // Normalizar nombres a minúsculas para comparación
+        if (!taxName) return null;
+        if(taxName === 'EXENTOS') taxName = 'IVA 0%';
         const normalizedTaxName = taxName.toLowerCase();
-
-        const matchedTax = taxCache.find(siigoTax => siigoTax.name.toLowerCase() === normalizedTaxName);
+        const matchedTax = taxList.find(siigoTax => siigoTax.name.toLowerCase() === normalizedTaxName);
 
         return {
             name: taxName,
@@ -330,10 +387,7 @@ const getTaxesByName = async (hioposTaxes) => {
             id: matchedTax ? matchedTax.id : null,
             status: matchedTax ? 'found' : 'not_found',
         };
-    });
-
-    // Filtrar valores nulos
-    return mappedTaxes.filter(tax => tax);
+    }).filter(Boolean);
 };
 const getTaxes = async () => {
     try {
@@ -371,13 +425,13 @@ export const createSiigoItem = async (item) => {
     try {
         const options = await getSiigoHeadersOptions();
         const data = await setItemCreationData(item);
-        console.log('Data armada para crear Articulo:', data);
+        console.log('Data armada para crear Articulo:', JSON.stringify(data) );
 
         const response = await axios.post(`${SIIGO_BASE_URL}/v1/products`, data, options);
         return response.data
     } catch (error) {
         // Si ocurre un error, devolver el estado 'error' y el mensaje de error
-        //console.log('Error de creacion de item', error.response.data)
+        console.log('Error de creacion de item', error.response.data)
         handleServiceError(error); // Maneja el error si es necesario
     }
 };
@@ -511,40 +565,25 @@ const getSiigoPaymentMethods = async (documentType) => {
 }
 
 export const getPaymentsByName = async (type, hioposPayment) => {
-    // Función para normalizar texto eliminando tildes y otros diacríticos
-    const normalizeText = (text) =>
-        text?.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    const normalizeText = (text) => text?.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+    const paymentData = await getPaymentMethodsWithCache(type);
 
-    // Validar si la caché es nula o el tipo no coincide
-    if (paymentsCache === null || type !== paymentsCache.type) {
-        paymentsCache = await getSiigoPaymentMethods(type);
-    }
-
-    // Determinar las propiedades según el tipo
     const paymentProperty = type === 'FC' ? 'MedioPago' : 'MedioDePago';
     const valueProperty = type === 'FC' ? 'Importe' : 'Valor';
-
-    // Normalizar los nombres para hacer la comparación
     const normalizedHioposPayment = normalizeText(hioposPayment[paymentProperty]);
 
-    // Buscar el método de pago en la caché por nombre
-    const matchedPayment = paymentsCache.payments.find(
+    const matchedPayment = paymentData.payments.find(
         (siigoPayment) => normalizeText(siigoPayment.name) === normalizedHioposPayment
     );
 
-    // Verificar si se encontró un pago correspondiente
-    if (matchedPayment) {
-        return {
-            id: matchedPayment.id,
-            name: matchedPayment.name,
-            value: hioposPayment[valueProperty],
-        };
-    } else {
-        return {
-            name: hioposPayment[paymentProperty],
-            message: `El método de pago "${hioposPayment[paymentProperty]}" no se encuentra registrado en Siigo.`,
-        };
-    }
+    return matchedPayment ? {
+        id: matchedPayment.id,
+        name: matchedPayment.name,
+        value: hioposPayment[valueProperty],
+    } : {
+        name: hioposPayment[paymentProperty],
+        message: `El método de pago "${hioposPayment[paymentProperty]}" no se encuentra registrado en Siigo.`,
+    };
 };
 const getDocumentIdByType = async (documentType) => {
     try {
@@ -558,34 +597,22 @@ const getDocumentIdByType = async (documentType) => {
 }
 
 export const matchDocumentTypeByName = async (type, hioposDocument) => {
-    // Normaliza el texto eliminando tildes y otros diacríticos
-    const normalizeText = (text) =>
-        text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-
-    // Validar si la caché es nula o el tipo no coincide
-    if (documentCache === null || type !== documentCache.type) {
-        documentCache = await getDocumentIdByType(type);
-    }
-
-    // Normalizar los nombres para hacer la comparación
+    const normalizeText = (text) => text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+    const documentData = await getDocumentTypesWithCache(type);
     const normalizedHioposDocument = normalizeText(hioposDocument);
 
-    const matchedDocument = documentCache.documents.find(
+    const matchedDocument = documentData.documents.find(
         (siigoDocument) => normalizeText(siigoDocument.name) === normalizedHioposDocument
     );
 
-    if (matchedDocument) {
-        return {
-            id: matchedDocument.id,
-            name: matchedDocument.name,
-            cost_center_default: matchedDocument.cost_center_default,
-        };
-    } else {
-        return {
-            name: hioposDocument,
-            message: `El documento de compra "${hioposDocument}" no se encuentra registrado en Siigo.`,
-        };
-    }
+    return matchedDocument ? {
+        id: matchedDocument.id,
+        name: matchedDocument.name,
+        cost_center_default: matchedDocument.cost_center_default,
+    } : {
+        name: hioposDocument,
+        message: `El documento de compra "${hioposDocument}" no se encuentra registrado en Siigo.`,
+    };
 };
 
 const getCostCenters = async () => {
@@ -600,36 +627,22 @@ const getCostCenters = async () => {
 }
 
 export const matchCostCenter = async (hioposCostCenter) => {
-    // Función para normalizar texto eliminando tildes y otros diacríticos
-    const normalizeText = (text) =>
-        text?.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-
-    // Obtener la caché si no está cargada
-    if (costCenterCache === null) {
-        costCenterCache = await getCostCenters();
-    }
-
-    // Normalizar el centro de costo de Hiopos para la comparación
+    const normalizeText = (text) => text?.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+    const costCenters = await getCostCentersWithCache();
     const normalizedHioposCostCenter = normalizeText(hioposCostCenter);
 
-    // Buscar el centro de costo en la caché
-    const matchedCenter = costCenterCache.find(
+    const matchedCenter = costCenters.find(
         (siigoCenter) => normalizeText(siigoCenter.name) === normalizedHioposCostCenter
     );
 
-    if (matchedCenter) {
-        return {
-            id: matchedCenter.id,
-            name: matchedCenter.name,
-        };
-    } else {
-        return {
-            name: hioposCostCenter,
-            message: `El centro de costo "${hioposCostCenter}" no se encuentra registrado en Siigo.`,
-        };
-    }
+    return matchedCenter ? {
+        id: matchedCenter.id,
+        name: matchedCenter.name,
+    } : {
+        name: hioposCostCenter,
+        message: `El centro de costo "${hioposCostCenter}" no se encuentra registrado en Siigo.`,
+    };
 };
-
 /*export const setItemDataForInvoice = async (item, type) => {
     try {
         const taxName = item.DetalleImpuesto ?? item.Impuestos; // Usa el primer valor definido
@@ -650,15 +663,25 @@ export const matchCostCenter = async (hioposCostCenter) => {
     }
 };*/
 
-export const setItemDataForInvoice = async (item, type) => {
+/*export const setItemDataForInvoice = async (item, type) => {
     try {
-        const taxName = item.DetalleImpuesto ?? item.Impuestos; // Usa el primer valor definido
-        const taxes = taxName ? await getTaxesByName(taxName) : []; // Asegura que siempre haya un array
-        const price = type === 'sales' ? item.Base_unitaria : item.Precio; // Usa Base en ventas, Precio en otros casos
+        const taxName = item.DetalleImpuesto ?? item.Impuestos;
+        const taxes = taxName ? await getTaxesByName(taxName) : [];
+        const price = type === 'sales' ? item.Base_unitaria : item.Precio;
 
-        // Si el precio es 0 en ventas, omitir el artículo
-        if (type === 'sales' && price === 0) {
-            return null;
+        // Si es venta, busca configuración
+        let taxed_price = undefined;
+        if (type === 'sales') {
+            if (price === 0) {
+                return null;
+            }
+
+            const [salesParam] = await model.ParametrizationModel.findAll({
+                where: { type: 'sales' },
+                limit: 1
+            });
+
+            taxed_price = salesParam?.tax_included ?? false; // o usa tax_included_in_calculation si aplica
         }
 
         return {
@@ -667,11 +690,61 @@ export const setItemDataForInvoice = async (item, type) => {
             description: item.Articulo,
             quantity: item.Unidades,
             price,
+            taxed_price, // solo se incluye si es 'sales'
             discount: item.Descuento,
             taxes,
         };
     } catch (error) {
         handleServiceError(error);
-        return null; // Retorna un valor manejable en caso de error
+        return null;
+    }
+};*/
+
+export const setItemDataForInvoice = async (item, type) => {
+    try {
+        const taxArray = item.DetalleImpuesto ?? item.Impuestos ?? [];
+
+        // Adaptar los cargos para que parezcan impuestos
+        const cargosAdaptados = (item.Cargos ?? []).map(cargo => ({
+            NombreImpuesto: cargo.NombreCargo,
+            PorcentajeImpuesto: cargo.PorcentajeCargo ?? 0, // Ajusta según tu fuente de datos
+        }));
+
+        // Combinar todo en un solo arreglo para búsqueda
+        const impuestosCombinados = [...taxArray, ...cargosAdaptados];
+
+        const taxes = impuestosCombinados.length > 0 ? await getTaxesByName(impuestosCombinados) : [];
+
+        const price = type === 'sales' ? item.Base_unitaria : item.Precio;
+
+        // Si es venta, busca configuración
+        let taxed_price = undefined;
+        if (type === 'sales') {
+            if (price === 0) return null;
+
+            const [salesParam] = await model.ParametrizationModel.findAll({
+                where: { type: 'sales' },
+                limit: 1
+            });
+
+            taxed_price = salesParam?.tax_included ?? false;
+        }
+
+        return {
+            type: 'Product',
+            code: item.RefArticulo,
+            description: item.Articulo,
+            quantity: item.Unidades,
+            price,
+            taxed_price,
+            discount: item.Descuento,
+            taxes,
+        };
+    } catch (error) {
+        handleServiceError(error);
+        return null;
     }
 };
+
+
+

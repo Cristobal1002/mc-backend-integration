@@ -10,9 +10,29 @@ export const manualProcessingLote = async (req, res, next) => {
         filters
     }
     try {
-        const response = await dataProcessorService.getHioposLote(service, data, true)
+        const response = await dataProcessorService.getHioposLote(service, data, true, true)
         console.log('RESPUESTA DEL MANUAL', response)
         standardResponse(res,200, 'Lote procesado satisfactoriamente', response)
+    } catch (error) {
+        next(error)
+    }
+}
+
+export const dataReprocessing = async (req, res, next) => {
+    try {
+        const response = await dataProcessorService.syncDataProcess(req.body)
+        standardResponse(res,200, 'transacciones procesadas satisfactoriamente', response)
+    } catch (error) {
+        next(error)
+    }
+}
+
+//SOLO PARA PRUEBA
+export const getTransactionById = async (req, res, next) => {
+    const { id } = req.query
+    try {
+        const response = await dataProcessorService.getTransactionById(id)
+        standardResponse(res,200, 'transacciones procesadas satisfactoriamente', response)
     } catch (error) {
         next(error)
     }

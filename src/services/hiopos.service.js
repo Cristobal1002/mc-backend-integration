@@ -24,18 +24,36 @@ let hioposTokenPromise = null; // Promesa compartida durante la obtención del t
 const cleanInvalidJSON = (jsonString) => {
     try {
         return jsonString
-            .replace(/:\s*,/g, ': "",') // Maneja valores faltantes
-            .replace(/,(\s*[}\]])/g, '$1') // Quita comas adicionales antes de objetos o arrays cerrados
-            .replace(/([{[])\s*,/g, '$1') // Quita comas adicionales al inicio de objetos o arrays
-            .replace(/[\x00-\x1F\x80-\xFF]/g, '') // Elimina caracteres no válidos
-            .replace(/"([^"]+)"\s*:/g, (match, key) => {
-                // Limpia espacios, % y otros caracteres no deseados en las claves
-                const cleanKey = key.replace(/\s+|%/g, '');
+            // 1. Valores vacíos tipo "key": , → null
+            .replace(/:\s*,/g, ': null,')
+            .replace(/:\s*([}\]])/g, ': null$1')
+
+            // 2. Quita comas extra antes de cerrar objetos/arrays
+            .replace(/,(\s*[}\]])/g, '$1')
+
+            // 3. Quita comas al inicio de objetos/arrays
+            .replace(/([{[])\s*,/g, '$1')
+
+            // 4. Elimina caracteres de control no imprimibles
+            .replace(/[\x00-\x1F\x7F-\x9F]/g, '')
+
+            // 5. Limpia claves con espacios o símbolos como %
+            .replace(/"([^"]+)"\s*:/g, (_, key) => {
+                const cleanKey = key.replace(/[\s%]/g, '');
                 return `"${cleanKey}":`;
             })
-            .replace(/"(\w+)"\s*:\s*(-?\d{1,3}(?:,\d{3})*\.\d+)/g, (match, key, value) => {
-                const cleanValue = value.replace(/,/g, '');
-                return `"${key}": ${cleanValue}`;
+
+            // 6. Números europeos: -89.203,00 → -89203.00 (fuera de strings)
+            .replace(/:\s*(-?\d{1,3}(?:\.\d{3})+,\d{2})(?=\s*[,\]}])/g, (_, value) => {
+                return `: ${value.replace(/\./g, '').replace(',', '.')}`;
+            })
+
+            // 7. Números simples tipo 0,00 → 0.00
+            .replace(/:\s*(-?\d+),(\d{2})(?=\s*[,\]}])/g, ': $1.$2')
+
+            // 8. Números americanos: 3,022,360.00 → 3022360.00
+            .replace(/:\s*(-?\d{1,3}(?:,\d{3})+(?:\.\d+)?)(?=\s*[,\]}])/g, (_, value) => {
+                return `: ${value.replace(/,/g, '')}`;
             });
     } catch (error) {
         console.error('Error al limpiar JSON:', error.message);
@@ -49,7 +67,9 @@ const cleanInvalidJSON = (jsonString) => {
 const parseBase64Response = (base64Data) => {
     try {
         const decodedData = Buffer.from(base64Data, 'base64').toString('utf-8');
+        //console.log('DECODEDATA', decodedData)
         const cleanedData = cleanInvalidJSON(decodedData);
+        //console.log('CLEANDATA:', cleanedData)
         return JSON5.parse(cleanedData);
     } catch (error) {
         console.error('Error al procesar la respuesta Base64:', error.message);

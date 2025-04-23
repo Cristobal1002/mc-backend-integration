@@ -1,5 +1,7 @@
 import cron from 'node-cron';
 import {dataProcessorService} from "../services/index.js";
+import {parametrizationService} from "../services/index.js";
+import {model} from "../models/index.js";
 
 // Función auxiliar para calcular el rango de la hora anterior
 const getPreviousHourRange = () => {
@@ -14,7 +16,7 @@ const getPreviousHourRange = () => {
 const processService = async (service, filters) => {
     try {
         console.log(`Procesando servicio: ${service}`);
-        await dataProcessorService.getHioposLote(service, filters);
+        await dataProcessorService.getHioposLote(service, filters, false, true);
         console.log(`Creando lote para servicio de: ${service}`);
     } catch (error) {
         console.error(`Error al procesar el servicio ${service}:`, error.message || error);
@@ -28,15 +30,19 @@ const executeCronTask = async () => {
         console.log('Ejecutando tarea para obtener datos de la hora anterior');
         const { startDate, startHour } = getPreviousHourRange();
 
+        const activeServices = await model.ParametrizationModel.findAll({
+            where: { is_active: true },
+        });
+
         const services = [
             { name: 'purchases', filter: { attributeId: 1077 } },
             { name: 'sales', filter: { attributeId: 1077 } },
         ];
 
-        for (const service of services) {
+        for (const service of activeServices) {
             const filters = [
                 {
-                    attributeId: service.filter.attributeId,
+                    attributeId: 1077,
                     arithmeticOperator: 'BETWEEN',
                     type: 'Integer',
                     value: startHour.toString(),
@@ -45,7 +51,7 @@ const executeCronTask = async () => {
             ];
 
             const dataFilter = { startDate, endDate: startDate, filters };
-            await processService(service.name, dataFilter);
+            await processService(service.type, dataFilter);
         }
 
         console.log('Tarea completada exitosamente');

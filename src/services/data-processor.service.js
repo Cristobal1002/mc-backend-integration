@@ -1,28 +1,10 @@
 import {hioposService, parametrizationService, siigoService} from "./index.js";
 import {model} from "../models/index.js";
 import {DateTime} from "luxon";
-import {createSaleInvoice, setItemDataForInvoice} from "./siigo.service.js";
+import {createSaleInvoice, getTaxesByName, setItemDataForInvoice} from "./siigo.service.js";
 
-/*export const getHioposLote = async (type, filter) => {
-    let lote
-    try {
-        //Crear el lote en la bd
-        lote = await model.LoteModel.create({type, filter })
-        console.log('ENCABEZADO LOTE', lote)
-        // Llamar al servicio para sincronizar compras o ventas
-        const getHioposData = await hioposService.getBridgeDataByType(type, filter);
 
-        // Guardar todas las transacciones y luego sincronizar con Siigo
-        await processLoteTransactions(type, getHioposData.data, lote.dataValues);
-
-    } catch (error) {
-        console.error(`Error processing Hiopos lote:`, error);
-        await model.LoteModel.update({status: 'failed', error: error.data}, {where:{id: lote.id}})
-        throw error; // Permite que el job sea reintentado
-    }
-}; */
-
-export const getHioposLote = async (type, filter, isManual = false) => {
+/*export const getHioposLote = async (type, filter, isManual = false) => {
     let lote;
     try {
         // Crear el lote en la BD
@@ -43,7 +25,57 @@ export const getHioposLote = async (type, filter, isManual = false) => {
         await model.LoteModel.update({ status: 'failed', error: error.data }, { where: { id: lote.id } });
         throw error;
     }
+};*/
+
+export const getHioposLote = async (type, filter, isManual = false, runSync = false) => {
+    let lote;
+    try {
+        // Crear el lote
+        console.log('ISMANUAL', isManual)
+        lote = await model.LoteModel.create({
+            type,
+            filter,
+            source: isManual ? 'manual' : 'automatic'
+        });
+
+        console.log(`[${isManual ? 'MANUAL' : 'CRON'}] LOTE CREADO:`, lote);
+
+        // Obtener data desde Hiopos
+        const getHioposData = await hioposService.getBridgeDataByType(type, filter);
+
+        // Procesar transacciones
+        const result = await processLoteTransactions(type, getHioposData.data, lote.dataValues);
+        console.log(`[${isManual ? 'MANUAL' : 'CRON'}] LOTE PROCESADO:`, result);
+
+        // ✅ Si runSync está activado, correr el flujo completo
+        if (runSync) {
+            const transactions = await model.TransactionModel.findAll({
+                where: { lote_id: lote.id },
+            });
+
+            const filtered = transactions.filter(tx => tx.type === type && tx.status === 'validation');
+
+            if (type === 'purchases') {
+                await purchaseValidator(filtered);
+                await purchaseInvoiceSync(filtered);
+            } else {
+                await salesValidator(filtered);
+                await saleInvoiceSync(filtered);
+            }
+
+            await closeLote();
+        }
+
+        return { result, loteId: lote.id };
+    } catch (error) {
+        console.error(`Error procesando lote:`, error);
+        if (lote) {
+            await model.LoteModel.update({ status: 'failed', error: error.data }, { where: { id: lote.id } });
+        }
+        throw error;
+    }
 };
+
 
 // Cambios para evitar duplicados
 /* export const processLoteTransactions = async (type, lote, loteHeader) => {
@@ -106,7 +138,7 @@ export const processLoteTransactions = async (type, lote, loteHeader) => {
                         ? await siigoService.setSiigoPurchaseInvoiceData([invoice], params)
                         : await siigoService.setSiigoSalesInvoiceData([invoice], params);
 
-                    const transaction = await registerTransaction(type, invoice, coreData[0], loteId);
+                    const transaction = await   registerTransaction(type, invoice, coreData[0], loteId);
 
                     if (transaction) {
                         processedCount++;
@@ -195,13 +227,20 @@ export const registerTransaction = async (type, hioposData, coreData, loteId) =>
     }
 };
 
-export const syncDataProcess= async () => {
+export const syncDataProcess = async ({ purchaseTransactions = null, salesTransactions = null } = {}) => {
     try {
-        await purchaseValidator();
-        await purchaseInvoiceSync();
-        await salesValidator();
-        //await saleInvoiceSync();
-        await closeLote();
+        if (purchaseTransactions !== null) {
+            await purchaseValidator(purchaseTransactions);
+            await purchaseInvoiceSync(purchaseTransactions);
+        }
+
+        if (salesTransactions !== null) {
+            await salesValidator(salesTransactions);
+            await saleInvoiceSync(salesTransactions);
+        }
+
+        await closeLote(); // Se puede dejar o condicionar también
+
     } catch (error) {
         console.error('Error al sincronizar con Siigo:', error);
         throw error;
@@ -232,9 +271,18 @@ export const getInvoicesToCreation = async (type) => {
     }
 }
 
-export const purchaseValidator = async () => {
+export const purchaseValidator = async (data = null) => {
     try {
-        const validationInfo = await getValidationRegisterData('purchases');
+        const validationInfo =
+            Array.isArray(data) && data.length > 0
+                ? data
+                : await getValidationRegisterData('purchases');
+
+        if (!validationInfo.length) {
+            console.warn('[PURCHASE VALIDATOR] No hay transacciones para procesar.');
+            return;
+        }
+
         const batchSize = 30; // Tamaño del paquete (lote)
         const rateLimitDelay = 100; // Delay entre peticiones (2 segundos)
         const batches = [];
@@ -247,15 +295,18 @@ export const purchaseValidator = async () => {
         for (const batch of batches) {
             for (const currentInvoice of batch) {
                 const { identification } = currentInvoice.core_data.supplier;
-                const { DetalleDocumento } = currentInvoice.hiopos_data;
+                const { DetalleDocumento, Retenciones } = currentInvoice.hiopos_data;
                 const { DetalleMediosdepago } = currentInvoice.hiopos_data;
+                const params = await parametrizationService.getParametrizationData();
+                const purchaseParam = params.data.find(param => param.type === 'purchases');
+
 
                 const invoiceData = {
                     date: DateTime.fromFormat(currentInvoice.hiopos_data.Fecha, "dd/MM/yyyy").toFormat("yyyy-MM-dd"),
                     provider_invoice: currentInvoice.core_data.provider_invoice,
                     observations: currentInvoice.core_data.observations,
                     discount_type: 'Percentage',
-                    tax_included: true
+                    tax_included: purchaseParam.tax_included
                 };
 
                 try {
@@ -327,10 +378,13 @@ export const purchaseValidator = async () => {
                                 const createdItem = await siigoService.createSiigoItem(item);
                                 itemsValidationResults.push({ item: item.RefArticulo, status: 'success', details: createdItem });
                             } catch (error) {
+                                console.error('Error en creación de artículo:', item.RefArticulo, error);
                                 itemsValidationResults.push({
                                     item: item.RefArticulo,
                                     status: 'failed',
-                                    details: { error: error.data?.Errors || error.message },
+                                    details: {
+                                        error: error.data?.Errors || error.message
+                                    },
                                 });
                             }
                         } else {
@@ -341,34 +395,29 @@ export const purchaseValidator = async () => {
                             });
                         }
 
-                        // Esperar entre solicitudes para no superar el límite de peticiones
                         await delay(rateLimitDelay);
                     }
 
 // Evaluar si hubo errores en la validación de artículos
                     const itemsStatus = itemsValidationResults.some(result => result.status === 'failed') ? 'failed' : 'success';
 
-// Guardar el estado de la validación de artículos en la base de datos
+// Guardar el estado de la validación de artículos
                     await model.TransactionModel.update({
                         items_validator_status: itemsStatus,
                         items_validator_details: itemsValidationResults,
                     }, { where: { id: currentInvoice.id } });
 
-// **El proceso continúa, sin importar si hubo errores en artículos**
-
-// Si los artículos son correctos, preparar los datos para la factura en Siigo
+                    // Preparar items solo si no hubo errores
                     let siigoItem = [];
-                    let taxValidationStatus = 'success';  // Inicializamos la validación como 'success'
+                    let taxValidationStatus = 'success';
 
                     if (itemsStatus === 'success') {
                         for (const item of DetalleDocumento) {
-                            // Usamos el setSiigoInvoiceItem que ya tienes
                             const itemResult = await siigoService.setItemDataForInvoice(item, currentInvoice.type);
+                            if (!itemResult) continue;
 
-                            // Comprobamos si el impuesto no se encontró
                             if (itemResult.taxes.some(tax => tax.status === 'not_found')) {
-                                taxValidationStatus = 'failed';  // Marcamos como fallido si no se encuentra algún impuesto
-                                // Agregamos detalles del error de impuestos no encontrados
+                                taxValidationStatus = 'failed';
                                 itemResult.taxes.forEach(tax => {
                                     if (tax.status === 'not_found') {
                                         tax.details = `Impuesto no encontrado: ${tax.name}`;
@@ -376,16 +425,19 @@ export const purchaseValidator = async () => {
                                 });
                             }
 
-                            // Guardamos el artículo procesado
                             siigoItem.push(itemResult);
                         }
+
+                        // Actualiza solo los detalles del impuesto si se procesaron los ítems
+                        await model.TransactionModel.update({
+                            items_validator_status: taxValidationStatus,
+                            items_validator_details: siigoItem,
+                        }, { where: { id: currentInvoice.id } });
+                    } else {
+                        // Si fallaron artículos, no se prepara siigoItem
+                        console.warn(`[Factura ${currentInvoice.id}] Se omitió el procesamiento de impuestos porque hay artículos fallidos.`);
                     }
 
-// Aquí guardamos el JSON real en el campo, no un string
-                    await model.TransactionModel.update({
-                        items_validator_status: taxValidationStatus,  // 'failed' o 'success'
-                        items_validator_details: siigoItem,  // Guardamos el objeto JSON directamente
-                    }, { where: { id: currentInvoice.id } });
 
 
                     // Validación de métodos de pago
@@ -395,8 +447,6 @@ export const purchaseValidator = async () => {
                             const siigoMethod = await siigoService.getPaymentsByName('FC', payment);
 
                             // Obtener la configuración desde params
-                            const params = await parametrizationService.getParametrizationData();
-                            const purchaseParam = params.data.find(param => param.type === 'purchases');
                             const calculatePayment = purchaseParam ? purchaseParam.calculate_payment : false;
 
                             if (!siigoMethod || !siigoMethod.id) {
@@ -437,6 +487,8 @@ export const purchaseValidator = async () => {
                     invoiceData.payments = paymentsValidationResults;
                     invoiceData.items = siigoItem;
 
+                    invoiceData.retentions  = await getTaxesByName(Retenciones)
+
                     console.log('Datos preparados para la factura:', invoiceData);
 
                     // Actualiza el estado final
@@ -476,9 +528,11 @@ export const purchaseValidator = async () => {
     }
 };
 
-const purchaseInvoiceSync = async () => {
+const purchaseInvoiceSync = async (data  = null) => {
     try {
-        const invoices = await getInvoicesToCreation('purchases');
+        const invoices = (data && data.length > 0)
+            ? data
+            : await getInvoicesToCreation('purchases');
         const rateLimitDelay = 500; // Delay entre peticiones
 
         for (const invoice of invoices) {
@@ -500,9 +554,17 @@ const purchaseInvoiceSync = async () => {
 };
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-export const salesValidator = async () => {
+export const salesValidator = async (data = null) => {
     try {
-        const validationInfo = await getValidationRegisterData('sales');
+        const validationInfo =
+            Array.isArray(data) && data.length > 0
+                ? data
+                : await getValidationRegisterData('sales');
+
+        if (!validationInfo.length) {
+            console.warn('[SALES VALIDATOR] No hay transacciones para procesar.');
+            return;
+        }
         const batchSize = 30; // Tamaño del paquete (lote)
         const rateLimitDelay = 300; // Delay en milisegundos entre peticiones
         const batches = [];
@@ -781,9 +843,9 @@ export const salesValidator = async () => {
     }
 };
 
-const saleInvoiceSync = async () => {
+const saleInvoiceSync = async (data = null) => {
     try {
-        const invoices = await getInvoicesToCreation('sales');
+        const invoices = data || await getInvoicesToCreation('sales');
         const rateLimitDelay = 500; // Delay entre peticiones
 
         for (const invoice of invoices) {
@@ -845,3 +907,15 @@ const closeLote = async () => {
         console.error("Error en closeLote:", error);
     }
 };
+
+//Solo para pruebas
+
+export const getTransactionById = async (id) => {
+    try {
+        const tran = await model.TransactionModel.findByPk(id)
+        return [tran]
+    } catch (error) {
+        console.error('[GET TRANSACTION] Error obteniendo la transaccion', error);
+        throw error;
+    }
+}
