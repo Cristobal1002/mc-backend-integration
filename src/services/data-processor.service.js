@@ -31,7 +31,6 @@ export const getHioposLote = async (type, filter, isManual = false, runSync = fa
     let lote;
     try {
         // Crear el lote
-        console.log('ISMANUAL', isManual)
         lote = await model.LoteModel.create({
             type,
             filter,
@@ -40,27 +39,35 @@ export const getHioposLote = async (type, filter, isManual = false, runSync = fa
 
         console.log(`[${isManual ? 'MANUAL' : 'CRON'}] LOTE CREADO:`, lote);
 
-        // Obtener data desde Hiopos
+        // Obtener datos desde Hiopos
         const getHioposData = await hioposService.getBridgeDataByType(type, filter);
 
-        // Procesar transacciones
+        // Procesar transacciones (solo registra)
         const result = await processLoteTransactions(type, getHioposData.data, lote.dataValues);
         console.log(`[${isManual ? 'MANUAL' : 'CRON'}] LOTE PROCESADO:`, result);
 
-        // ✅ Si runSync está activado, correr el flujo completo
-        if (runSync) {
-            const transactions = await model.TransactionModel.findAll({
-                where: { lote_id: lote.id },
-            });
+        // 🧠 Solo en modo manual con runSync, continuar con validación + sincronización
+        if (isManual && runSync) {
+            const transactions = await model.TransactionModel.findAll({ where: { lote_id: lote.id } });
 
-            const filtered = transactions.filter(tx => tx.type === type && tx.status === 'validation');
+            const validatable = transactions.filter(tx => tx.type === type && tx.status === 'validation');
 
             if (type === 'purchases') {
-                await purchaseValidator(filtered);
-                await purchaseInvoiceSync(filtered);
-            } else {
-                await salesValidator(filtered);
-                await saleInvoiceSync(filtered);
+                await purchaseValidator(validatable);
+
+                const toInvoice = await model.TransactionModel.findAll({
+                    where: { lote_id: lote.id, type: 'purchases', status: 'to-invoice' }
+                });
+
+                await purchaseInvoiceSync(toInvoice);
+            } else if (type === 'sales') {
+                await salesValidator(validatable);
+
+                const toInvoice = await model.TransactionModel.findAll({
+                    where: { lote_id: lote.id, type: 'sales', status: 'to-invoice' }
+                });
+
+                await saleInvoiceSync(toInvoice);
             }
 
             await closeLote();
@@ -68,7 +75,7 @@ export const getHioposLote = async (type, filter, isManual = false, runSync = fa
 
         return { result, loteId: lote.id };
     } catch (error) {
-        console.error(`Error procesando lote:`, error);
+        console.error('Error procesando lote:', error);
         if (lote) {
             await model.LoteModel.update({ status: 'failed', error: error.data }, { where: { id: lote.id } });
         }
@@ -487,7 +494,7 @@ export const purchaseValidator = async (data = null) => {
                     invoiceData.payments = paymentsValidationResults;
                     invoiceData.items = siigoItem;
 
-                    invoiceData.retentions  = await getTaxesByName(Retenciones)
+                    //invoiceData.retentions  = await getTaxesByName(Retenciones)
 
                     console.log('Datos preparados para la factura:', invoiceData);
 
@@ -530,12 +537,14 @@ export const purchaseValidator = async (data = null) => {
 
 const purchaseInvoiceSync = async (data  = null) => {
     try {
+        console.log('Data en sync purchase invoice:', data)
         const invoices = (data && data.length > 0)
             ? data
             : await getInvoicesToCreation('purchases');
         const rateLimitDelay = 500; // Delay entre peticiones
 
         for (const invoice of invoices) {
+            console.log('Factura para enviar de compras:', invoice.siigo_body)
             try {
                 const creation = await siigoService.createPurchaseInvoice(invoice.siigo_body);
                 if (creation) {
