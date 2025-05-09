@@ -55,6 +55,8 @@ const getPaymentMethodsWithCache = async (type) => {
 };
 
 const getDocumentTypesWithCache = async (type) => {
+    console.log('TIPO en consulta del doc:', type)
+    console.log('documentCache', documentCache)
     const now = Date.now();
     if (!documentCache[type] || now > (documentCacheExpiration[type] || 0)) {
         documentCache[type] = await getDocumentIdByType(type);

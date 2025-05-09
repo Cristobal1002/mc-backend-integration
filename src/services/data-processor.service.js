@@ -469,6 +469,7 @@ export const purchaseValidator = async (data = null) => {
                                     id: siigoMethod.id,
                                     name: siigoMethod.name,
                                     value: calculatePayment ? currentInvoice.amount : payment.Importe, // Usa currentInvoice.amount si calculatePayment es true
+                                    due_date: DateTime.fromFormat(payment.FechaVencimiento, "dd/MM/yyyy").toFormat("yyyy-MM-dd"),
                                     status: 'success',
                                     details: [`Método de pago "${siigoMethod.name}" procesado correctamente.`],
                                 });
@@ -478,6 +479,7 @@ export const purchaseValidator = async (data = null) => {
                                 id: null,
                                 name: payment.MedioPago,
                                 value: payment.Importe,
+                                due_date: DateTime.fromFormat(payment.FechaVencimiento, "dd/MM/yyyy").toFormat("yyyy-MM-dd"),
                                 status: 'failed',
                                 details: [`Error procesando el método de pago "${payment.MedioPago}"`],
                             });
