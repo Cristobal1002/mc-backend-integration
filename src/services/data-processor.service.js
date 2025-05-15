@@ -576,8 +576,8 @@ export const salesValidator = async (data = null) => {
             console.warn('[SALES VALIDATOR] No hay transacciones para procesar.');
             return;
         }
-        const batchSize = 30; // Tamaño del paquete (lote)
-        const rateLimitDelay = 300; // Delay en milisegundos entre peticiones
+        const batchSize = 25; // Tamaño del paquete (lote)
+        const rateLimitDelay = 500; // Delay en milisegundos entre peticiones
         const batches = [];
 
         // Dividir las facturas en paquetes de tamaño fijo
@@ -590,7 +590,9 @@ export const salesValidator = async (data = null) => {
             for (const currentInvoice of batch) {
                 const { identification } = currentInvoice.core_data.customer;
                 const { DetalleDocumento } = currentInvoice.hiopos_data;
-                const { MedioPago } = currentInvoice.hiopos_data
+                const { MedioPago } = currentInvoice.hiopos_data;
+                const invoiceDate = DateTime.fromISO(currentInvoice.hiopos_data.Fecha);
+                const dueDate = invoiceDate.plus({ days: 30 }).toISODate();
 
                 const invoiceData = {
                     //todo: ver si el seller se deja aqui o en parametrizacion
@@ -785,6 +787,7 @@ export const salesValidator = async (data = null) => {
                                     id: siigoMethod.id,
                                     name: siigoMethod.name,
                                     value: siigoMethod.value,
+                                    due_date: dueDate
                                     //status: 'success',
                                     //details: [`Método de pago "${siigoMethod.name}" procesado correctamente.`],
                                 });

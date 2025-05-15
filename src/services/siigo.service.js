@@ -717,10 +717,10 @@ export const setItemDataForInvoice = async (item, type) => {
 
         const taxes = impuestosCombinados.length > 0 ? await getTaxesByName(impuestosCombinados) : [];
 
-        const price = type === 'sales' ? item.Base_unitaria : item.Precio;
+        const price = type === 'sales' ? item.Precio : item.Precio;
 
         // Si es venta, busca configuración
-        let taxed_price = undefined;
+       /* let taxed_price = undefined;
         if (type === 'sales') {
             if (price === 0) return null;
 
@@ -730,15 +730,14 @@ export const setItemDataForInvoice = async (item, type) => {
             });
 
             taxed_price = salesParam?.tax_included ?? false;
-        }
+        }*/
 
         return {
             type: 'Product',
             code: item.RefArticulo,
             description: item.Articulo,
             quantity: item.Unidades,
-            price,
-            taxed_price,
+            taxed_price: price,
             discount: item.Descuento,
             taxes,
         };
