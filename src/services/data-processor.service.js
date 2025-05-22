@@ -30,54 +30,76 @@ import {createSaleInvoice, getTaxesByName, setItemDataForInvoice} from "./siigo.
 export const getHioposLote = async (type, filter, isManual = false, runSync = false) => {
     let lote;
     try {
-        // Crear el lote
+        // 1️⃣ Crear el lote
         lote = await model.LoteModel.create({
             type,
             filter,
             source: isManual ? 'manual' : 'automatic'
         });
 
-        console.log(`[${isManual ? 'MANUAL' : 'CRON'}] LOTE CREADO:`, lote);
+        console.log(`[${isManual ? 'MANUAL' : 'CRON'}] LOTE CREADO:`, lote.id);
 
-        // Obtener datos desde Hiopos
+        // 2️⃣ Obtener datos desde Hiopos
         const getHioposData = await hioposService.getBridgeDataByType(type, filter);
+        const hioposArray = getHioposData?.data || [];
 
-        // Procesar transacciones (solo registra)
-        const result = await processLoteTransactions(type, getHioposData.data, lote.dataValues);
-        console.log(`[${isManual ? 'MANUAL' : 'CRON'}] LOTE PROCESADO:`, result);
+        console.log(`[${type.toUpperCase()}] Datos recibidos de Hiopos:`, hioposArray.length);
+        console.log(`[${type.toUpperCase()}] Primeros documentos:`, hioposArray.slice(0, 3).map(i => ({
+            doc: i.SerieNumero || i['Serie/Numero'],
+            tipo: i.TipoDocumento
+        })));
 
-        // 🧠 Solo en modo manual con runSync, continuar con validación + sincronización
+        // 3️⃣ Procesar transacciones (solo registro y deduplicación)
+        const result = await processLoteTransactions(type, hioposArray, lote.dataValues);
+        console.log(`[${type.toUpperCase()}] Resultado del procesamiento de lote:`, result);
+
+        // 4️⃣ Si es proceso manual con sincronización inmediata
         if (isManual && runSync) {
-            const transactions = await model.TransactionModel.findAll({ where: { lote_id: lote.id } });
+            console.log('[SYNC MANUAL] Entrando a flujo de validación + sincronización...');
 
-            const validatable = transactions.filter(tx => tx.type === type && tx.status === 'validation');
+            // 🔄 REFRESCAR transacciones luego del registro
+            const updatedTransactions = await model.TransactionModel.findAll({ where: { lote_id: lote.id } });
+            console.log('[SYNC MANUAL] Transacciones actualizadas del lote:', updatedTransactions.map(tx => tx.document_number));
+
+            // 🧪 Filtrar las que están listas para validar
+            const validatable = updatedTransactions.filter(tx => tx.type === type && tx.status === 'validation');
+            console.log('[SYNC MANUAL] Transacciones para validar:', validatable.map(tx => tx.document_number));
 
             if (type === 'purchases') {
+                console.log('[VALIDATOR] Iniciando validación de compras...');
                 await purchaseValidator(validatable);
 
                 const toInvoice = await model.TransactionModel.findAll({
                     where: { lote_id: lote.id, type: 'purchases', status: 'to-invoice' }
                 });
+                console.log('[SYNC] Facturas de compra listas para sincronizar:', toInvoice.map(tx => tx.document_number));
 
                 await purchaseInvoiceSync(toInvoice);
             } else if (type === 'sales') {
+                console.log('[VALIDATOR] Iniciando validación de ventas...');
                 await salesValidator(validatable);
 
                 const toInvoice = await model.TransactionModel.findAll({
                     where: { lote_id: lote.id, type: 'sales', status: 'to-invoice' }
                 });
+                console.log('[SYNC] Facturas de venta listas para sincronizar:', toInvoice.map(tx => tx.document_number));
 
                 await saleInvoiceSync(toInvoice);
             }
 
+            console.log('[SYNC] Cerrando lote...');
             await closeLote();
         }
 
+        console.log(`[FIN LOTE] Proceso completo para el lote ${lote.id}`);
         return { result, loteId: lote.id };
     } catch (error) {
         console.error('Error procesando lote:', error);
         if (lote) {
-            await model.LoteModel.update({ status: 'failed', error: error.data }, { where: { id: lote.id } });
+            await model.LoteModel.update(
+                { status: 'failed', error: error.data || error.message },
+                { where: { id: lote.id } }
+            );
         }
         throw error;
     }
@@ -127,60 +149,89 @@ export const getHioposLote = async (type, filter, isManual = false, runSync = fa
     }
 }; */
 
+// Función de utilidad para normalizar texto y limpiar caracteres corruptos
+const normalizeText = (text) => {
+    return text
+        ?.toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")               // elimina tildes
+        .replace(/[^\x20-\x7E\u00A0-\u00FF]/g, "")     // elimina caracteres corruptos como �
+        .replace(/\s+/g, " ")                          // normaliza espacios múltiples
+        .trim();
+};
+
 export const processLoteTransactions = async (type, lote, loteHeader) => {
     try {
         const loteId = loteHeader.id;
         let processedCount = 0;
         let omittedCount = 0;
-        let hasErrors = false; // Flag para saber si hubo errores
+        let hasErrors = false;
 
         for (const invoice of lote) {
             try {
-                const params = await parametrizationService.getParametrizationData()
+                const params = await parametrizationService.getParametrizationData();
+
+                const rawTipo = invoice.TipoDocumento;
+                const tipoNormalizado = normalizeText(rawTipo);
+
+                console.log(`[TX LOOP] Documento: ${invoice.SerieNumero || invoice['Serie/Numero']} - Tipo: ${rawTipo} (normalizado: ${tipoNormalizado})`);
+
+                // Detección por fragmentos clave (tolerante a errores de escritura)
+                const isCompra = tipoNormalizado.includes('factura') &&
+                    tipoNormalizado.includes('compra');
+
+                const isVenta = tipoNormalizado.includes('factura') &&
+                    tipoNormalizado.includes('venta') &&
+                    tipoNormalizado.includes('electr');
+
                 if (
-                    (type === 'purchases' && invoice.TipoDocumento === "Factura compra") ||
-                    (type === 'sales' && invoice.TipoDocumento === "Factura venta electrónica")
+                    (type === 'purchases' && isCompra) ||
+                    (type === 'sales' && isVenta)
                 ) {
+                    console.log(`[TX LOOP] ✅ Tipo válido. Intentando registrar transacción...`);
+
                     const coreData = type === 'purchases'
                         ? await siigoService.setSiigoPurchaseInvoiceData([invoice], params)
                         : await siigoService.setSiigoSalesInvoiceData([invoice], params);
 
-                    const transaction = await   registerTransaction(type, invoice, coreData[0], loteId);
+                    const transaction = await registerTransaction(type, invoice, coreData[0], loteId);
 
                     if (transaction) {
                         processedCount++;
+                        console.log(`[TX LOOP] ✅ Transacción registrada: ${transaction.document_number}`);
                     } else {
                         omittedCount++;
+                        console.log(`[TX LOOP] ⚠️ Transacción omitida (posible duplicado).`);
                     }
+                } else {
+                    omittedCount++;
+                    console.log(`[TX LOOP] ❌ Tipo omitido. No coincide con '${type}'. Tipo normalizado: "${tipoNormalizado}"`);
                 }
             } catch (error) {
                 console.error('[PROCESS TRANSACTION ERROR]', invoice, error);
-                hasErrors = true; // Si hay un error, marcamos la bandera
+                hasErrors = true;
             }
         }
 
-        console.log(`[PROCESS LOTE] Procesadas: ${processedCount}, Omitidas: ${omittedCount}`);
+        console.log(`[PROCESS LOTE] ✔️ Procesadas: ${processedCount}, ❌ Omitidas: ${omittedCount}`);
 
-        // Actualizar la cantidad de transacciones en el lote
         await model.LoteModel.update(
             { transactions_count: processedCount, omitted_count: omittedCount },
             { where: { id: loteId } }
         );
 
-        // Si todas las transacciones se procesaron sin errores, iniciar la sincronización con Siigo
-        if (!hasErrors) {
-            console.log('[SINCRONIZANDO] Inicia proceso de sincronización con Siigo');
-            await syncDataProcess();
-        } else {
-            console.warn('[PROCESS LOTE] Algunas transacciones fallaron. Revisa antes de sincronizar.');
+        if (hasErrors) {
+            console.warn('[PROCESS LOTE] ⚠️ Algunas transacciones fallaron durante el registro.');
         }
 
         return { processed: processedCount, omitted: omittedCount };
     } catch (error) {
-        console.error('[PROCESS LOTE TRANSACTIONS] Error procesando lote:', error);
+        console.error('[PROCESS LOTE TRANSACTIONS] 💥 Error procesando lote:', error);
         throw error;
     }
 };
+
+
 /* export const registerTransaction = async (type, hioposData, coreData, loteId) => {
     try {
         const documentNumber = hioposData.SerieNumero || hioposData['Serie/Numero'];
@@ -576,16 +627,15 @@ export const salesValidator = async (data = null) => {
             console.warn('[SALES VALIDATOR] No hay transacciones para procesar.');
             return;
         }
-        const batchSize = 25; // Tamaño del paquete (lote)
-        const rateLimitDelay = 500; // Delay en milisegundos entre peticiones
+
+        const batchSize = 25;
+        const rateLimitDelay = 500;
         const batches = [];
 
-        // Dividir las facturas en paquetes de tamaño fijo
         for (let i = 0; i < validationInfo.length; i += batchSize) {
             batches.push(validationInfo.slice(i, i + batchSize));
         }
 
-        // Procesar cada paquete secuencialmente
         for (const batch of batches) {
             for (const currentInvoice of batch) {
                 const { identification } = currentInvoice.core_data.customer;
@@ -595,7 +645,6 @@ export const salesValidator = async (data = null) => {
                 const dueDate = invoiceDate.plus({ days: 30 }).toISODate();
 
                 const invoiceData = {
-                    //todo: ver si el seller se deja aqui o en parametrizacion
                     date: currentInvoice.hiopos_data.Fecha,
                     observations: currentInvoice.core_data.observations,
                     discount_type: 'Percentage',
@@ -604,45 +653,32 @@ export const salesValidator = async (data = null) => {
                 };
 
                 try {
-                    // Validación de documentos
-                    const siigoDocument = await siigoService.matchDocumentTypeByName(
-                        'FV',
-                        currentInvoice.hiopos_data.Serie
-                    );
+                    const siigoDocument = await siigoService.matchDocumentTypeByName('FV', currentInvoice.hiopos_data.Serie);
                     if (!siigoDocument || !siigoDocument.id) {
-                        await model.TransactionModel.update(
-                            {
-                                document_validator_status: 'failed',
-                                document_validator_details: siigoDocument,
-                            },
-                            { where: { id: currentInvoice.id } }
-                        );
+                        await model.TransactionModel.update({
+                            document_validator_status: 'failed',
+                            document_validator_details: siigoDocument,
+                        }, { where: { id: currentInvoice.id } });
                     } else {
-                        await model.TransactionModel.update(
-                            {
-                                document_validator_status: 'success',
-                                document_validator_details: siigoDocument,
-                            },
-                            { where: { id: currentInvoice.id } }
-                        );
+                        await model.TransactionModel.update({
+                            document_validator_status: 'success',
+                            document_validator_details: siigoDocument,
+                        }, { where: { id: currentInvoice.id } });
                         invoiceData.document = siigoDocument;
                     }
 
-                    // Validación de centro de costo
-                    let coce
-                    const {cost_center_default } = invoiceData.document
-                    //Se valida si viene por defecto
-                    if(cost_center_default){
-                        coce = cost_center_default
+                    let coce;
+                    const { cost_center_default } = invoiceData.document;
+                    if (cost_center_default) {
+                        coce = cost_center_default;
                         await model.TransactionModel.update({
                             cost_center_validator_status: 'default',
-                            cost_center_validator_details: {name: 'Cost Center by defaul', id: coce},
+                            cost_center_validator_details: { name: 'Cost Center by defaul', id: coce },
                         }, { where: { id: currentInvoice.id } });
                         invoiceData.cost_center = coce;
-                        delete invoiceData.document.cost_center_default
-
-                    }else{
-                      coce =   await siigoService.matchCostCenter(currentInvoice.hiopos_data.Almacen);
+                        delete invoiceData.document.cost_center_default;
+                    } else {
+                        coce = await siigoService.matchCostCenter(currentInvoice.hiopos_data.Almacen);
                         if (!coce || !coce.id) {
                             await model.TransactionModel.update({
                                 cost_center_validator_status: 'failed',
@@ -654,26 +690,23 @@ export const salesValidator = async (data = null) => {
                                 cost_center_validator_details: coce,
                             }, { where: { id: currentInvoice.id } });
                             invoiceData.cost_center = coce.id;
-                            delete invoiceData.document.cost_center_default
+                            delete invoiceData.document.cost_center_default;
                         }
                     }
 
-                    // Validación de clientes
                     const siigoContact = await siigoService.getContactsByIdentification(identification);
                     if (!siigoContact || siigoContact.results.length === 0) {
                         const hioposContact = await hioposService.getContactByDocument('/customers', identification);
                         const createdCustomer = await siigoService.createContact('/customers', hioposContact);
 
                         if (createdCustomer) {
-                            await model.TransactionModel.update(
-                                {
-                                    contact_validator_status: 'success',
-                                    contact_validator_details: [
-                                        { message: 'Cliente creado exitosamente', customerId: createdCustomer.id },
-                                    ],
-                                },
-                                { where: { id: currentInvoice.id } }
-                            );
+                            await model.TransactionModel.update({
+                                contact_validator_status: 'success',
+                                contact_validator_details: [
+                                    { message: 'Cliente creado exitosamente', customerId: createdCustomer.id },
+                                ],
+                            }, { where: { id: currentInvoice.id } });
+
                             invoiceData.customer = {
                                 id: createdCustomer.id,
                                 identification: createdCustomer.identification,
@@ -683,93 +716,77 @@ export const salesValidator = async (data = null) => {
                                 address: createdCustomer.address,
                                 phones: createdCustomer.phones,
                                 contact: createdCustomer.contact,
-
                             };
                         } else {
-                            await model.TransactionModel.update(
-                                {
-                                    contact_validator_status: 'failed',
-                                    contact_validator_details: [
-                                        { error: 'Error al crear el Cliente en Siigo' },
-                                    ],
-                                },
-                                { where: { id: currentInvoice.id } }
-                            );
-                            return; // Salir del proceso para esta factura y continuar con la siguiente
+                            await model.TransactionModel.update({
+                                contact_validator_status: 'failed',
+                                contact_validator_details: [
+                                    { error: 'Error al crear el Cliente en Siigo' },
+                                ],
+                            }, { where: { id: currentInvoice.id } });
+                            return;
                         }
                     } else {
-                        await model.TransactionModel.update(
-                            {
-                                contact_validator_status: 'success',
-                                contact_validator_details: [
-                                    { message: 'Cliente encontrado', CustomerId: siigoContact.results[0].id },
-                                ],
-                            },
-                            { where: { id: currentInvoice.id } }
-                        );
+                        await model.TransactionModel.update({
+                            contact_validator_status: 'success',
+                            contact_validator_details: [
+                                { message: 'Cliente encontrado', CustomerId: siigoContact.results[0].id },
+                            ],
+                        }, { where: { id: currentInvoice.id } });
+
                         invoiceData.customer = {
                             id: siigoContact.results[0].id,
                             identification: siigoContact.results[0].identification,
                             id_type: siigoContact.results[0].id_type.code,
                             person_type: siigoContact.results[0].person_type,
-                            name:  siigoContact.results[0].name,
-                            address:  siigoContact.results[0].address,
-                            phones:  siigoContact.results[0].phones || [{number: "6012770000"}],
+                            name: siigoContact.results[0].name,
+                            address: siigoContact.results[0].address,
+                            phones: siigoContact.results[0].phones || [{ number: "6012770000" }],
                             contact: siigoContact.results[0].contact,
                         };
                     }
 
-                    // Validación de artículos
                     const itemsValidationResults = [];
                     for (const item of DetalleDocumento) {
                         const siigoItem = await siigoService.getItemByCode(item.RefArticulo);
                         if (!siigoItem || siigoItem.results.length === 0) {
                             try {
                                 const createdItem = await siigoService.createSiigoItem(item);
-                                itemsValidationResults.push({
-                                    item: item.RefArticulo,
-                                    status: 'success',
-                                    details: createdItem,
-                                });
+                                itemsValidationResults.push({ item: item.RefArticulo, status: 'success', details: createdItem });
                             } catch (error) {
-                                itemsValidationResults.push({
-                                    item: item.RefArticulo,
-                                    status: 'failed',
-                                    details: { error: error.data?.Errors || error.message },
-                                });
+                                itemsValidationResults.push({ item: item.RefArticulo, status: 'failed', details: { error: error.data?.Errors || error.message } });
                             }
                         } else {
-                            itemsValidationResults.push({
-                                item: item.RefArticulo,
-                                status: 'success',
-                                details: siigoItem.results[0],
-                            });
+                            itemsValidationResults.push({ item: item.RefArticulo, status: 'success', details: siigoItem.results[0] });
                         }
-
-                        // Esperar para no superar el límite de solicitudes
                         await delay(rateLimitDelay);
                     }
 
-                    const itemsStatus = itemsValidationResults.some((result) => result.status === 'failed') ? 'failed' : 'success';
-                    await model.TransactionModel.update(
-                        {
-                            items_validator_status: itemsStatus,
-                            items_validator_details: itemsValidationResults,
-                        },
-                        { where: { id: currentInvoice.id } }
-                    );
-                    // Actualizar si los artículos son correctos
+                    const itemsStatus = itemsValidationResults.some(r => r.status === 'failed') ? 'failed' : 'success';
+                    await model.TransactionModel.update({
+                        items_validator_status: itemsStatus,
+                        items_validator_details: itemsValidationResults,
+                    }, { where: { id: currentInvoice.id } });
+
                     let siigoItem = [];
                     if (itemsStatus === 'success') {
                         for (const item of DetalleDocumento) {
                             const formattedItem = await siigoService.setItemDataForInvoice(item, 'sales');
-                            if (formattedItem) { // Solo agregar si no es null
-                                siigoItem.push(formattedItem);
-                            }
+                            if (formattedItem) siigoItem.push(formattedItem);
                         }
                     }
 
-                    // Validación de métodos de pago
+                    const propina = MedioPago.find(p => p.Tipo && p.Tipo.toLowerCase() === 'propina');
+                    if (propina) {
+                        siigoItem.push({
+                            code: 'PROP01',
+                            type: 'Service',
+                            description: 'Propina',
+                            quantity: 1,
+                            taxed_price: propina.Valor
+                        });
+                    }
+
                     const paymentsValidationResults = [];
                     for (const payment of MedioPago) {
                         try {
@@ -786,10 +803,10 @@ export const salesValidator = async (data = null) => {
                                 paymentsValidationResults.push({
                                     id: siigoMethod.id,
                                     name: siigoMethod.name,
-                                    value: siigoMethod.value,
-                                    due_date: dueDate
-                                    //status: 'success',
-                                    //details: [`Método de pago "${siigoMethod.name}" procesado correctamente.`],
+                                    value: payment.Valor,
+                                    due_date: dueDate,
+                                    status: 'success',
+                                    details: [`Método de pago "${siigoMethod.name}" procesado correctamente.`],
                                 });
                             }
                         } catch (error) {
@@ -801,53 +818,64 @@ export const salesValidator = async (data = null) => {
                                 details: [`Error procesando el método de pago "${payment.MedioDePago}"`],
                             });
                         }
-
-                        const paymentsStatus = paymentsValidationResults.some(result => result.status === 'failed') ? 'failed' : 'success';
-                        await model.TransactionModel.update({
-                            payments_validator_status: paymentsStatus,
-                            payments_validator_details: paymentsValidationResults,
-                        }, { where: { id: currentInvoice.id } });
-                        invoiceData.payments = paymentsValidationResults;
-                        invoiceData.items = siigoItem;
-
-                        console.log('Datos preparados para la factura:', invoiceData);
-
-                        // Actualiza el estado final
-                        const endValidation = await model.TransactionModel.findByPk(currentInvoice.id);
-                        const validationFields = [
-                            'document_validator_status',
-                            'cost_center_validator_status',
-                            'contact_validator_status',
-                            'items_validator_status',
-                            'payments_validator_status'
-                        ];
-
-// Verifica que todos los campos sean 'success' o 'default'
-                        const allSuccessOrDefault = validationFields.every(field =>
-                            endValidation[field] === 'success' || endValidation[field] === 'default'
-                        );
-
-                        endValidation.siigo_body = invoiceData;
-                        endValidation.status = allSuccessOrDefault ? 'to-invoice' : 'failed';
-
-// Guarda los cambios
-                        await endValidation.save();
-                        // Esperar entre peticiones de métodos de pago
                         await delay(rateLimitDelay);
                     }
 
+                    const paymentsStatus = paymentsValidationResults.some(p => p.status === 'failed') ? 'failed' : 'success';
+                    await model.TransactionModel.update({
+                        payments_validator_status: paymentsStatus,
+                        payments_validator_details: paymentsValidationResults,
+                    }, { where: { id: currentInvoice.id } });
+
+                    const groupedPayments = Object.values(
+                        paymentsValidationResults
+                            .filter(p => p.status !== 'failed')
+                            .reduce((acc, curr) => {
+                                if (!acc[curr.id]) {
+                                    acc[curr.id] = {
+                                        id: curr.id,
+                                        name: curr.name,
+                                        value: 0,
+                                        due_date: curr.due_date
+                                    };
+                                }
+                                acc[curr.id].value += curr.value;
+                                return acc;
+                            }, {})
+                    );
+
+                    invoiceData.payments = groupedPayments;
+                    invoiceData.items = siigoItem;
+
+                    console.log('Datos preparados para la factura:', invoiceData);
+
+                    const endValidation = await model.TransactionModel.findByPk(currentInvoice.id);
+                    const validationFields = [
+                        'document_validator_status',
+                        'cost_center_validator_status',
+                        'contact_validator_status',
+                        'items_validator_status',
+                        'payments_validator_status'
+                    ];
+
+                    const allSuccessOrDefault = validationFields.every(field =>
+                        endValidation[field] === 'success' || endValidation[field] === 'default'
+                    );
+
+                    endValidation.siigo_body = invoiceData;
+                    endValidation.status = allSuccessOrDefault ? 'to-invoice' : 'failed';
+
+                    await endValidation.save();
+                    await delay(rateLimitDelay);
+
                 } catch (validationError) {
                     console.error(`Error procesando factura de venta ID: ${currentInvoice.id}`, validationError);
-                    await model.TransactionModel.update(
-                        {
-                            error: validationError.message,
-                            status: 'failed',
-                        },
-                        { where: { id: currentInvoice.id } }
-                    );
+                    await model.TransactionModel.update({
+                        error: validationError.message,
+                        status: 'failed',
+                    }, { where: { id: currentInvoice.id } });
                 }
 
-                // Delay entre cada factura para no sobrecargar el sistema
                 await delay(rateLimitDelay);
             }
         }
@@ -856,6 +884,7 @@ export const salesValidator = async (data = null) => {
         throw error;
     }
 };
+
 
 const saleInvoiceSync = async (data = null) => {
     try {

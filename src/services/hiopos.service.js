@@ -62,18 +62,40 @@ const cleanInvalidJSON = (jsonString) => {
 };
 
 /**
- * Decodifica una cadena Base64 y la convierte en JSON.
+ * Limpia caracteres especiales y tildes de todos los strings dentro de un objeto JSON.
+ */
+const sanitizeStringsDeep = (obj) => {
+    if (Array.isArray(obj)) {
+        return obj.map(sanitizeStringsDeep);
+    } else if (obj && typeof obj === 'object') {
+        return Object.fromEntries(
+            Object.entries(obj).map(([key, value]) => [key, sanitizeStringsDeep(value)])
+        );
+    } else if (typeof obj === 'string') {
+        return obj
+            .normalize("NFD")                             // separa tildes
+            .replace(/[\u0300-\u036f]/g, '')              // elimina tildes
+            .replace(/[^\x20-\x7E\u00A0-\u00FF]/g, '')    // elimina caracteres corruptos como �
+            .trim();
+    }
+    return obj;
+};
+
+/**
+ * Decodifica una cadena Base64 y la convierte en JSON limpio.
  */
 const parseBase64Response = (base64Data) => {
     try {
         const decodedData = Buffer.from(base64Data, 'base64').toString('utf-8');
-        //console.log('DECODEDATA', decodedData)
         const cleanedData = cleanInvalidJSON(decodedData);
-        //console.log('CLEANDATA:', cleanedData)
-        return JSON5.parse(cleanedData);
+        const parsed = JSON5.parse(cleanedData);
+        return sanitizeStringsDeep(parsed); // ← limpieza profunda
     } catch (error) {
         console.error('Error al procesar la respuesta Base64:', error.message);
-        throw new CustomError({ message: `Error al procesar la respuesta Base64, ${error.message}`, code: 500 });
+        throw new CustomError({
+            message: `Error al procesar la respuesta Base64, ${error.message}`,
+            code: 500
+        });
     }
 };
 
