@@ -1,5 +1,6 @@
 import {Sequelize} from "sequelize";
-
+import * as dotenv from "dotenv";
+dotenv.config()
 
 let dbConfig = {
     database: process.env.DATABASE || process.env.PROD_DATABASE,
