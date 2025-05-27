@@ -27,14 +27,15 @@ import {createSaleInvoice, getTaxesByName, setItemDataForInvoice} from "./siigo.
     }
 };*/
 
-export const getHioposLote = async (type, filter, isManual = false, runSync = false) => {
+export const getHioposLote = async (type, filter, isManual = false, runSync = false, jobId = null) => {
     let lote;
     try {
         // 1️⃣ Crear el lote
         lote = await model.LoteModel.create({
             type,
             filter,
-            source: isManual ? 'manual' : 'automatic'
+            source: isManual ? 'manual' : 'automatic',
+            job_id: jobId
         });
 
         console.log(`[${isManual ? 'MANUAL' : 'CRON'}] LOTE CREADO:`, lote.id);

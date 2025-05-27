@@ -41,6 +41,16 @@ LoteModel.init({
         allowNull: true,
         defaultValue: 0,
     },
+    job_id: {
+        type: DataTypes.UUID,
+        allowNull: true,
+        references: {
+            model: 'jobs',
+            key: 'id'
+        },
+        onUpdate: 'CASCADE',
+        onDelete: 'SET NULL'
+    }
 },{
     sequelize,
     modelName: 'LoteModel',
