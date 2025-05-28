@@ -706,21 +706,18 @@ export const setItemDataForInvoice = async (item, type) => {
     try {
         const taxArray = item.DetalleImpuesto ?? item.Impuestos ?? [];
 
-        // Adaptar los cargos para que parezcan impuestos
         const cargosAdaptados = (item.Cargos ?? []).map(cargo => ({
             NombreImpuesto: cargo.NombreCargo,
-            PorcentajeImpuesto: cargo.PorcentajeCargo ?? 0, // Ajusta según tu fuente de datos
+            PorcentajeImpuesto: cargo.PorcentajeCargo ?? 0,
         }));
 
-        // Combinar todo en un solo arreglo para búsqueda
         const impuestosCombinados = [...taxArray, ...cargosAdaptados];
 
         const taxes = impuestosCombinados.length > 0 ? await getTaxesByName(impuestosCombinados) : [];
 
-        const price = type === 'sales' ? item.Precio : item.Precio;
+        const price = item.Precio;
 
-        // Si es venta, busca configuración
-       /* let taxed_price = undefined;
+        let taxed_price;
         if (type === 'sales') {
             if (price === 0) return null;
 
@@ -730,16 +727,16 @@ export const setItemDataForInvoice = async (item, type) => {
             });
 
             taxed_price = salesParam?.tax_included ?? false;
-        }*/
+        }
 
         return {
             type: 'Product',
             code: item.RefArticulo,
             description: item.Articulo,
             quantity: item.Unidades,
-            taxed_price: price,
             discount: item.Descuento,
             taxes,
+            ...(type === 'sales' ? { taxed_price } : { price }),
         };
     } catch (error) {
         handleServiceError(error);
