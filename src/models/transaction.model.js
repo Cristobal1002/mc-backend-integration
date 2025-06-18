@@ -44,7 +44,7 @@ TransactionModel.init({
         allowNull: true
     },
     cost_center_validator_status: {
-        type:  DataTypes.ENUM('success', 'failed', 'default', 'validation'),
+        type:  DataTypes.ENUM('success', 'failed', 'default', 'validation', 'ignored'),
         defaultValue: 'validation'
     },
     cost_center_validator_details: {

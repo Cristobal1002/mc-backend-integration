@@ -61,6 +61,40 @@ const cleanInvalidJSON = (jsonString) => {
     }
 };
 
+const cleanInvalidJSONSafe = (jsonString) => {
+    try {
+        return jsonString
+            // 1. Reemplaza valores vacíos tipo `"key": ,` o `"key":}` por null
+            .replace(/:\s*,/g, ': null,')
+            .replace(/:\s*([}\]])/g, ': null$1')
+
+            // 2. Elimina comas antes de cerrar objetos o arrays
+            .replace(/,(\s*[}\]])/g, '$1')
+
+            // 3. Elimina comas al inicio de objetos o arrays
+            .replace(/([{[])\s*,/g, '$1')
+
+            // 4. Elimina caracteres invisibles corruptos
+            .replace(/[\x00-\x1F\x7F-\x9F]/g, '')
+
+            // 5. Corrige números europeos con puntos de miles y comas decimales (fuera de strings)
+            .replace(/:\s*(-?\d{1,3}(?:\.\d{3})+,\d{2})(?=\s*[,\]}])/g, (_, value) =>
+                `: ${value.replace(/\./g, '').replace(',', '.')}`
+            )
+
+            // 6. Corrige números simples tipo 0,00 → 0.00
+            .replace(/:\s*(-?\d+),(\d{2})(?=\s*[,\]}])/g, ': $1.$2')
+
+            // 7. Corrige números americanos tipo 3,000.00 → 3000.00
+            .replace(/:\s*(-?\d{1,3}(?:,\d{3})+(?:\.\d+)?)(?=\s*[,\]}])/g, (_, value) =>
+                `: ${value.replace(/,/g, '')}`
+            );
+    } catch (error) {
+        console.error('Error al limpiar JSON:', error.message);
+        throw new Error('Error en la limpieza del JSON');
+    }
+};
+
 /**
  * Limpia caracteres especiales y tildes de todos los strings dentro de un objeto JSON.
  */
@@ -87,7 +121,7 @@ const sanitizeStringsDeep = (obj) => {
 const parseBase64Response = (base64Data) => {
     try {
         const decodedData = Buffer.from(base64Data, 'base64').toString('utf-8');
-        const cleanedData = cleanInvalidJSON(decodedData);
+        const cleanedData = cleanInvalidJSONSafe(decodedData);
         const parsed = JSON5.parse(cleanedData);
         return sanitizeStringsDeep(parsed); // ← limpieza profunda
     } catch (error) {

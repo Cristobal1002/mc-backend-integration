@@ -610,6 +610,7 @@ export const matchDocumentTypeByName = async (type, hioposDocument) => {
     return matchedDocument ? {
         id: matchedDocument.id,
         name: matchedDocument.name,
+        cost_center_mandatory: matchedDocument.cost_center_mandatory,
         cost_center_default: matchedDocument.cost_center_default,
     } : {
         name: hioposDocument,
@@ -702,7 +703,7 @@ export const matchCostCenter = async (hioposCostCenter) => {
     }
 };*/
 
-export const setItemDataForInvoice = async (item, type) => {
+/*export const setItemDataForInvoice = async (item, type) => {
     try {
         const taxArray = item.DetalleImpuesto ?? item.Impuestos ?? [];
 
@@ -742,7 +743,60 @@ export const setItemDataForInvoice = async (item, type) => {
         handleServiceError(error);
         return null;
     }
+};*/
+export const setItemDataForInvoice = async (item, type) => {
+    try {
+        const taxArray = item.DetalleImpuesto ?? item.Impuestos ?? [];
+        const cargosAdaptados = (item.Cargos ?? []).map(cargo => ({
+            NombreImpuesto: cargo.NombreCargo,
+            PorcentajeImpuesto: cargo.PorcentajeCargo ?? 0,
+        }));
+
+        const impuestosCombinados = [...taxArray, ...cargosAdaptados];
+
+        // 🆕 Incluir también las retefuente como impuestos
+        const retencionesArticulo = item.RetencionesArticulo ?? [];
+        const retefuentes = retencionesArticulo
+            .filter(ret => {
+                const nombre = ret.Retencion?.toLowerCase() ?? '';
+                return nombre.includes('fuente');
+            })
+            .map(ret => ({
+                NombreImpuesto: ret.Retencion,
+                PorcentajeImpuesto: ret['%Retencion'] ?? 0,
+            }));
+
+        const allTributaries = [...impuestosCombinados, ...retefuentes];
+
+        const taxes = allTributaries.length > 0
+            ? await getTaxesByName(allTributaries)
+            : [];
+
+        const price = item.Precio;
+
+        let taxed_price;
+        if (type === 'sales') {
+            if (price === 0) return null;
+
+            const [salesParam] = await model.ParametrizationModel.findAll({
+                where: { type: 'sales' },
+                limit: 1
+            });
+
+            taxed_price = salesParam?.tax_included ?? false;
+        }
+
+        return {
+            type: 'Product',
+            code: item.RefArticulo,
+            description: item.Articulo,
+            quantity: item.Unidades,
+            discount: item.Descuento ?? item["%Descuento"] ?? 0,
+            taxes,
+            ...(type === 'sales' ? { taxed_price } : { price }),
+        };
+    } catch (error) {
+        handleServiceError(error);
+        return null;
+    }
 };
-
-
-

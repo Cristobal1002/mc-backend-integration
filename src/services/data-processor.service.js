@@ -330,7 +330,7 @@ export const getInvoicesToCreation = async (type) => {
     }
 }
 
-export const purchaseValidator = async (data = null) => {
+/*export const purchaseValidator = async (data = null) => {
     try {
         const validationInfo =
             Array.isArray(data) && data.length > 0
@@ -587,6 +587,289 @@ export const purchaseValidator = async (data = null) => {
         console.error('Error general del validador:', error);
         throw error;
     }
+};*/
+
+export const purchaseValidator = async (data = null) => {
+    try {
+        const validationInfo =
+            Array.isArray(data) && data.length > 0
+                ? data
+                : await getValidationRegisterData('purchases');
+
+        if (!validationInfo.length) {
+            console.warn('[PURCHASE VALIDATOR] No hay transacciones para procesar.');
+            return;
+        }
+
+        const batchSize = 30;
+        const rateLimitDelay = 100;
+        const batches = [];
+
+        for (let i = 0; i < validationInfo.length; i += batchSize) {
+            batches.push(validationInfo.slice(i, i + batchSize));
+        }
+
+        for (const batch of batches) {
+            for (const currentInvoice of batch) {
+                const { identification } = currentInvoice.core_data.supplier;
+                const { DetalleDocumento, Retenciones } = currentInvoice.hiopos_data;
+                const { DetalleMediosdepago } = currentInvoice.hiopos_data;
+                const params = await parametrizationService.getParametrizationData();
+                const purchaseParam = params.data.find(param => param.type === 'purchases');
+
+                const invoiceData = {
+                    date: DateTime.fromFormat(currentInvoice.hiopos_data.Fecha, "dd/MM/yyyy").toFormat("yyyy-MM-dd"),
+                    provider_invoice: currentInvoice.core_data.provider_invoice,
+                    observations: currentInvoice.core_data.observations,
+                    discount_type: 'Percentage',
+                    tax_included: purchaseParam.tax_included
+                };
+
+                try {
+                    const siigoDocument = await siigoService.matchDocumentTypeByName('FC', currentInvoice.hiopos_data.Serie);
+
+                    if (!siigoDocument || !siigoDocument.id) {
+                        await model.TransactionModel.update({
+                            document_validator_status: 'failed',
+                            document_validator_details: siigoDocument,
+                        }, { where: { id: currentInvoice.id } });
+                    } else {
+                        await model.TransactionModel.update({
+                            document_validator_status: 'success',
+                            document_validator_details: siigoDocument,
+                        }, { where: { id: currentInvoice.id } });
+                        invoiceData.document = siigoDocument;
+                    }
+
+                    // 🧠 Validar centro de costos solo si es mandatorio o si Almacen está presente
+                    const isCostCenterRequired = siigoDocument?.cost_center_mandatory ?? false;
+                    const rawAlmacen = currentInvoice.hiopos_data.Almacen?.trim();
+
+                    if (isCostCenterRequired || rawAlmacen) {
+                        const coce = await siigoService.matchCostCenter(rawAlmacen);
+
+                        if (!coce || !coce.id) {
+                            if (isCostCenterRequired) {
+                                await model.TransactionModel.update({
+                                    cost_center_validator_status: 'failed',
+                                    cost_center_validator_details: [{
+                                        message: `Centro de costo obligatorio pero no encontrado para "${rawAlmacen}".`
+                                    }],
+                                }, { where: { id: currentInvoice.id } });
+                            } else {
+                                await model.TransactionModel.update({
+                                    cost_center_validator_status: 'success',
+                                    cost_center_validator_details: [{
+                                        message: `Centro de costo no obligatorio y no encontrado para "${rawAlmacen}".`
+                                    }],
+                                }, { where: { id: currentInvoice.id } });
+                            }
+                        } else {
+                            await model.TransactionModel.update({
+                                cost_center_validator_status: 'success',
+                                cost_center_validator_details: coce,
+                            }, { where: { id: currentInvoice.id } });
+                            invoiceData.cost_center = coce.id;
+                        }
+                    } else {
+                        await model.TransactionModel.update({
+                            cost_center_validator_status: 'success',
+                            cost_center_validator_details: [{
+                                message: 'Centro de costo no requerido y no especificado.',
+                            }],
+                        }, { where: { id: currentInvoice.id } });
+                    }
+
+                    const siigoContact = await siigoService.getContactsByIdentification(identification);
+                    if (!siigoContact || siigoContact.results.length === 0) {
+                        const hioposContact = await hioposService.getContactByDocument('/vendors', identification);
+                        const createdVendor = await siigoService.createContact('/vendors', hioposContact.Proveedores);
+
+                        if (createdVendor) {
+                            await model.TransactionModel.update({
+                                contact_validator_status: 'success',
+                                contact_validator_details: [{ message: 'Proveedor creado exitosamente', vendorId: createdVendor.id }],
+                            }, { where: { id: currentInvoice.id } });
+                            invoiceData.supplier = { id: createdVendor.id, identification: createdVendor.identification };
+                        } else {
+                            await model.TransactionModel.update({
+                                contact_validator_status: 'failed',
+                                contact_validator_details: [{ error: 'Error al crear el proveedor en Siigo' }],
+                            }, { where: { id: currentInvoice.id } });
+                            continue;
+                        }
+                    } else {
+                        await model.TransactionModel.update({
+                            contact_validator_status: 'success',
+                            contact_validator_details: [{ message: 'Proveedor encontrado', vendorId: siigoContact.results[0].id }],
+                        }, { where: { id: currentInvoice.id } });
+                        invoiceData.supplier = { id: siigoContact.results[0].id, identification: siigoContact.results[0].identification };
+                    }
+
+                    const itemsValidationResults = [];
+
+                    for (const item of DetalleDocumento) {
+                        const siigoItem = await siigoService.getItemByCode(item.RefArticulo);
+
+                        if (!siigoItem || siigoItem.results.length === 0) {
+                            try {
+                                const createdItem = await siigoService.createSiigoItem(item);
+                                itemsValidationResults.push({ item: item.RefArticulo, status: 'success', details: createdItem });
+                            } catch (error) {
+                                console.error('Error en creación de artículo:', item.RefArticulo, error);
+                                itemsValidationResults.push({
+                                    item: item.RefArticulo,
+                                    status: 'failed',
+                                    details: {
+                                        error: error.data?.Errors || error.message
+                                    },
+                                });
+                            }
+                        } else {
+                            itemsValidationResults.push({
+                                item: item.RefArticulo,
+                                status: 'success',
+                                details: siigoItem.results[0],
+                            });
+                        }
+
+                        await delay(rateLimitDelay);
+                    }
+
+                    const itemsStatus = itemsValidationResults.some(result => result.status === 'failed') ? 'failed' : 'success';
+
+                    await model.TransactionModel.update({
+                        items_validator_status: itemsStatus,
+                        items_validator_details: itemsValidationResults,
+                    }, { where: { id: currentInvoice.id } });
+
+                    let siigoItem = [];
+                    let taxValidationStatus = 'success';
+
+                    if (itemsStatus === 'success') {
+                        for (const item of DetalleDocumento) {
+                            const itemResult = await siigoService.setItemDataForInvoice(item, currentInvoice.type);
+                            if (!itemResult) continue;
+
+                            if (itemResult.taxes.some(tax => tax.status === 'not_found')) {
+                                taxValidationStatus = 'failed';
+                                itemResult.taxes.forEach(tax => {
+                                    if (tax.status === 'not_found') {
+                                        tax.details = `Impuesto no encontrado: ${tax.name}`;
+                                    }
+                                });
+                            }
+
+                            siigoItem.push(itemResult);
+                        }
+
+                        await model.TransactionModel.update({
+                            items_validator_status: taxValidationStatus,
+                            items_validator_details: siigoItem,
+                        }, { where: { id: currentInvoice.id } });
+                    } else {
+                        console.warn(`[Factura ${currentInvoice.id}] Se omitió el procesamiento de impuestos porque hay artículos fallidos.`);
+                    }
+
+                    const paymentsValidationResults = [];
+                    for (const payment of DetalleMediosdepago) {
+                        try {
+                            const siigoMethod = await siigoService.getPaymentsByName('FC', payment);
+                            const calculatePayment = purchaseParam ? purchaseParam.calculate_payment : false;
+
+                            if (!siigoMethod || !siigoMethod.id) {
+                                paymentsValidationResults.push({
+                                    id: null,
+                                    name: payment.MedioPago,
+                                    value: payment.Importe,
+                                    status: 'failed',
+                                    details: [`El método de pago "${payment.MedioPago}" no existe en Siigo`],
+                                });
+                            } else {
+                                paymentsValidationResults.push({
+                                    id: siigoMethod.id,
+                                    name: siigoMethod.name,
+                                    value: calculatePayment ? currentInvoice.amount : payment.Importe,
+                                    due_date: DateTime.fromFormat(payment.FechaVencimiento, "dd/MM/yyyy").toFormat("yyyy-MM-dd"),
+                                    status: 'success',
+                                    details: [`Método de pago "${siigoMethod.name}" procesado correctamente.`],
+                                });
+                            }
+                        } catch (error) {
+                            paymentsValidationResults.push({
+                                id: null,
+                                name: payment.MedioPago,
+                                value: payment.Importe,
+                                due_date: DateTime.fromFormat(payment.FechaVencimiento, "dd/MM/yyyy").toFormat("yyyy-MM-dd"),
+                                status: 'failed',
+                                details: [`Error procesando el método de pago "${payment.MedioPago}"`],
+                            });
+                        }
+                        await delay(rateLimitDelay);
+                    }
+
+                    const paymentsStatus = paymentsValidationResults.some(result => result.status === 'failed') ? 'failed' : 'success';
+                    await model.TransactionModel.update({
+                        payments_validator_status: paymentsStatus,
+                        payments_validator_details: paymentsValidationResults,
+                    }, { where: { id: currentInvoice.id } });
+
+                    invoiceData.payments = paymentsValidationResults;
+                    invoiceData.items = siigoItem;
+
+                    // 🆕 Añadir retenciones globales (reteICA, reteIVA)
+                    const retencionesDocumento = currentInvoice.hiopos_data.RetencionesDocumento ?? [];
+                    const retencionesFiltradas = retencionesDocumento.filter(ret => {
+                        const nombre = ret.NombreRetencion?.toLowerCase() ?? '';
+                        return !nombre.includes('fuente');
+                    });
+
+                    const retencionesSiigo = retencionesFiltradas.length > 0
+                        ? await getTaxesByName(retencionesFiltradas.map(r => ({
+                            NombreImpuesto: r.NombreRetencion,
+                            PorcentajeImpuesto: r.Porcentaje,
+                        })))
+                        : [];
+
+                    invoiceData.retentions = retencionesSiigo.map((ret, idx) => ({
+                        id: ret.id,
+                        name: ret.name,
+                        percentage: ret.percentage,
+                        value: -Math.abs(retencionesFiltradas[idx].ImporteRetenido ?? 0),
+                        status: ret.status,
+                    }));
+
+                    console.log('Datos preparados para la factura:', invoiceData);
+
+                    const endValidation = await model.TransactionModel.findByPk(currentInvoice.id);
+                    const validationFields = [
+                        'document_validator_status',
+                        'cost_center_validator_status',
+                        'contact_validator_status',
+                        'items_validator_status',
+                        'payments_validator_status'
+                    ];
+
+                    const allSuccess = validationFields.every(field => endValidation[field] === 'success');
+                    endValidation.siigo_body = invoiceData;
+                    endValidation.status = allSuccess ? 'to-invoice' : 'failed';
+                    await endValidation.save();
+
+                    await delay(rateLimitDelay);
+
+                } catch (validationError) {
+                    console.error(`Error procesando factura de compra ID: ${currentInvoice.id}`, validationError);
+                    await model.TransactionModel.update({
+                        error: validationError.message,
+                        status: 'failed',
+                    }, { where: { id: currentInvoice.id } });
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Error general del validador:', error);
+        throw error;
+    }
 };
 
 const purchaseInvoiceSync = async (data  = null) => {
@@ -787,6 +1070,7 @@ export const salesValidator = async (data = null) => {
                             taxed_price: propina.Valor
                         });
                     }
+
 
                     const paymentsValidationResults = [];
                     for (const payment of MedioPago) {
