@@ -774,17 +774,7 @@ export const setItemDataForInvoice = async (item, type) => {
 
         const price = item.Precio;
 
-        let taxed_price;
-        if (type === 'sales') {
-            if (price === 0) return null;
-
-            const [salesParam] = await model.ParametrizationModel.findAll({
-                where: { type: 'sales' },
-                limit: 1
-            });
-
-            taxed_price = salesParam?.tax_included ?? false;
-        }
+        if (type === 'sales' && price === 0) return null;
 
         return {
             type: 'Product',
@@ -793,7 +783,7 @@ export const setItemDataForInvoice = async (item, type) => {
             quantity: item.Unidades,
             discount: item.Descuento ?? item["%Descuento"] ?? 0,
             taxes,
-            ...(type === 'sales' ? { taxed_price } : { price }),
+            ...(type === 'sales' ? { taxed_price: price } : { price }),
         };
     } catch (error) {
         handleServiceError(error);
