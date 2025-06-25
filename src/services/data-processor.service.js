@@ -855,6 +855,8 @@ export const purchaseValidator = async (data = null) => {
                         'payments_validator_status'
                     ];
 
+                    console.log('>>> Factura armada con tax_included:', invoiceData.tax_included);
+
                     const allSuccess = validationFields.every(field => endValidation[field] === 'success');
                     endValidation.siigo_body = invoiceData;
                     endValidation.status = allSuccess ? 'to-invoice' : 'failed';
