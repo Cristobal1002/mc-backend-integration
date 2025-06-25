@@ -1,6 +1,7 @@
 import {hioposService, parametrizationService, siigoService} from "./index.js";
 import {model} from "../models/index.js";
 import {DateTime} from "luxon";
+import { Op } from 'sequelize';
 import {createSaleInvoice, getTaxesByName, setItemDataForInvoice} from "./siigo.service.js";
 
 
@@ -594,15 +595,19 @@ export const purchaseValidator = async (data = null) => {
         const validationInfo =
             Array.isArray(data) && data.length > 0
                 ? data
-                : await getValidationRegisterData('purchases');
+                : await getValidationRegisterData('sales');
 
         if (!validationInfo.length) {
-            console.warn('[PURCHASE VALIDATOR] No hay transacciones para procesar.');
+            console.warn('[SALES VALIDATOR] No hay transacciones para procesar.');
             return;
         }
 
-        const batchSize = 30;
-        const rateLimitDelay = 100;
+        // 🔄 Resetear estado de transacciones antes de validarlas
+        const ids = validationInfo.map(tx => tx.id).filter(Boolean);
+        await resetTransactionState(ids);
+
+        const batchSize = 25;
+        const rateLimitDelay = 900;
         const batches = [];
 
         for (let i = 0; i < validationInfo.length; i += batchSize) {
@@ -912,8 +917,12 @@ export const salesValidator = async (data = null) => {
             return;
         }
 
+        // 🔄 Resetear estado de transacciones antes de validarlas
+        const ids = validationInfo.map(tx => tx.id).filter(Boolean);
+        await resetTransactionState(ids);
+
         const batchSize = 25;
-        const rateLimitDelay = 500;
+        const rateLimitDelay = 900;
         const batches = [];
 
         for (let i = 0; i < validationInfo.length; i += batchSize) {
@@ -1247,3 +1256,25 @@ export const getTransactionById = async (id) => {
         throw error;
     }
 }
+
+export const resetTransactionState = async (ids = []) => {
+    if (!Array.isArray(ids) || ids.length === 0) return;
+
+    await model.TransactionModel.update({
+        document_validator_status: 'validation',
+        document_validator_details: null,
+        cost_center_validator_status: 'validation',
+        cost_center_validator_details: null,
+        contact_validator_status: 'validation',
+        contact_validator_details: null,
+        items_validator_status: 'validation',
+        items_validator_details: [],
+        payments_validator_status: 'validation',
+        payments_validator_details: [],
+        status: 'validation',
+        siigo_body: null,
+        error: null,
+    }, {
+        where: { id: { [Op.in]: ids } }
+    });
+};
