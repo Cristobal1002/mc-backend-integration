@@ -289,7 +289,7 @@ export const registerTransaction = async (type, hioposData, coreData, loteId) =>
 
 export const syncDataProcess = async ({ purchaseTransactions = null, salesTransactions = null } = {}) => {
     try {
-        if (purchaseTransactions !== null) {
+        /*if (purchaseTransactions !== null) {
             await purchaseValidator(purchaseTransactions);
             await purchaseInvoiceSync(purchaseTransactions);
         }
@@ -297,6 +297,31 @@ export const syncDataProcess = async ({ purchaseTransactions = null, salesTransa
         if (salesTransactions !== null) {
             await salesValidator(salesTransactions);
             await saleInvoiceSync(salesTransactions);
+        }*/
+        if (purchaseTransactions !== null) {
+            await purchaseValidator(purchaseTransactions);
+
+            const refreshedPurchases = await model.TransactionModel.findAll({
+                where: {
+                    id: purchaseTransactions.map(tx => tx.id),
+                    status: 'to-invoice'
+                }
+            });
+
+            await purchaseInvoiceSync(refreshedPurchases);
+        }
+
+        if (salesTransactions !== null) {
+            await salesValidator(salesTransactions);
+
+            const refreshedSales = await model.TransactionModel.findAll({
+                where: {
+                    id: salesTransactions.map(tx => tx.id),
+                    status: 'to-invoice' // solo las que realmente quedaron listas
+                }
+            });
+
+            await saleInvoiceSync(refreshedSales);
         }
 
         await closeLote(); // Se puede dejar o condicionar también
@@ -607,7 +632,7 @@ export const purchaseValidator = async (data = null) => {
         await resetTransactionState(ids);
 
         const batchSize = 25;
-        const rateLimitDelay = 900;
+        const rateLimitDelay = 1500;
         const batches = [];
 
         for (let i = 0; i < validationInfo.length; i += batchSize) {
@@ -1042,33 +1067,121 @@ export const salesValidator = async (data = null) => {
                     }
 
                     const itemsValidationResults = [];
+
                     for (const item of DetalleDocumento) {
-                        const siigoItem = await siigoService.getItemByCode(item.RefArticulo);
+                        const ref = item.RefArticulo;
+                        const siigoItem = await siigoService.getItemByCode(ref);
                         if (!siigoItem || siigoItem.results.length === 0) {
                             try {
                                 const createdItem = await siigoService.createSiigoItem(item);
-                                itemsValidationResults.push({ item: item.RefArticulo, status: 'success', details: createdItem });
+                                itemsValidationResults.push({
+                                    item: ref,
+                                    status: 'success',
+                                    details: createdItem
+                                });
                             } catch (error) {
-                                itemsValidationResults.push({ item: item.RefArticulo, status: 'failed', details: { error: error.data?.Errors || error.message } });
+                                itemsValidationResults.push({
+                                    item: ref,
+                                    status: 'failed',
+                                    details: { error: error.data?.Errors || error.message }
+                                });
                             }
                         } else {
-                            itemsValidationResults.push({ item: item.RefArticulo, status: 'success', details: siigoItem.results[0] });
+                            itemsValidationResults.push({
+                                item: ref,
+                                status: 'success',
+                                details: siigoItem.results[0]
+                            });
                         }
+
                         await delay(rateLimitDelay);
+
+                        // ✅ Validar modificadores (sin detener el flujo)
+                        if (Array.isArray(item.Modificadores_Articulo)) {
+                            for (const mod of item.Modificadores_Articulo) {
+                                const modRef = mod.Referencia || mod.RefArticulo;
+                                if (!modRef || mod.Precio <= 0) continue;
+
+                                const dummyItem = {
+                                    RefArticulo: modRef,
+                                    Articulo: mod.Articulo,
+                                    Precio: mod.Precio,
+                                    Unidades: mod.Unidades,
+                                    DetalleImpuesto: [],
+                                    RetencionesArticulo: [],
+                                    Cargos: [],
+                                    Descuento: 0
+                                };
+
+                                const siigoMod = await siigoService.getItemByCode(modRef);
+                                if (!siigoMod || siigoMod.results.length === 0) {
+                                    try {
+                                        const createdMod = await siigoService.createSiigoItem(dummyItem);
+                                        itemsValidationResults.push({
+                                            item: modRef,
+                                            status: 'success',
+                                            details: createdMod
+                                        });
+                                    } catch (error) {
+                                        itemsValidationResults.push({
+                                            item: modRef,
+                                            status: 'failed',
+                                            details: { error: error.data?.Errors || error.message }
+                                        });
+                                    }
+                                } else {
+                                    itemsValidationResults.push({
+                                        item: modRef,
+                                        status: 'success',
+                                        details: siigoMod.results[0]
+                                    });
+                                }
+
+                                await delay(rateLimitDelay);
+                            }
+                        }
                     }
 
+                    // ⚠️ Aun si hay errores, se registran todos y se sigue
                     const itemsStatus = itemsValidationResults.some(r => r.status === 'failed') ? 'failed' : 'success';
+
                     await model.TransactionModel.update({
                         items_validator_status: itemsStatus,
                         items_validator_details: itemsValidationResults,
                     }, { where: { id: currentInvoice.id } });
 
                     let siigoItem = [];
-                    if (itemsStatus === 'success') {
-                        for (const item of DetalleDocumento) {
-                            const formattedItem = await siigoService.setItemDataForInvoice(item, 'sales');
-                            if (formattedItem) siigoItem.push(formattedItem);
+
+                    for (const item of DetalleDocumento) {
+                        const formattedItem = await siigoService.setItemDataForInvoice(item, 'sales');
+                        if (formattedItem) siigoItem.push(formattedItem);
+
+                        if (Array.isArray(item.Modificadores_Articulo)) {
+                            for (const mod of item.Modificadores_Articulo) {
+                                if ((mod.Precio ?? 0) <= 0) continue;
+
+                                const adaptedMod = {
+                                    RefArticulo: mod.Referencia || mod.RefArticulo,
+                                    Articulo: mod.Articulo,
+                                    Unidades: mod.Unidades,
+                                    Precio: mod.Precio,
+                                    Descuento: 0,
+                                    DetalleImpuesto: [],
+                                    RetencionesArticulo: [],
+                                    Cargos: []
+                                };
+
+                                const formattedMod = await siigoService.setItemDataForInvoice(adaptedMod, 'sales');
+                                if (formattedMod) siigoItem.push(formattedMod);
+                            }
                         }
+                    }
+
+                    invoiceData.items = siigoItem;
+
+                    // 🚨 Validación final antes de guardar
+                    if (!invoiceData.items || invoiceData.items.length === 0) {
+                        throw new Error('No se encontraron ítems válidos para facturar');
                     }
 
                     const propina = MedioPago.find(p => p.Tipo && p.Tipo.toLowerCase() === 'propina');

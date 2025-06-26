@@ -316,50 +316,53 @@ export const setSiigoSalesInvoiceData = async (data, params) => {
 }
 export const setItemCreationData = async (item) => {
     try {
-        const taxes = await getTaxesByName(item.DetalleImpuesto || item.Impuestos); // Esperar el resultado
-        // Obtener los grupos de cuentas
+        const taxes = await getTaxesByName(item.DetalleImpuesto || item.Impuestos || []);
+
         const inventoryGroups = await getInventoryGroupsWithCache();
+        const familyName = item.Familia || 'MODIFICADORES'; // fallback
+        const itemFamilyLower = familyName.toLowerCase();
 
+        const accountGroup = inventoryGroups.find(group =>
+            group.name.toLowerCase() === itemFamilyLower
+        );
 
-        console.log('GRUPOS DE INVENTARIO', inventoryGroups)
+        const fallbackGroup = inventoryGroups.find(group =>
+            group.name.toLowerCase() === 'productos'
+        );
 
-        // Buscar el grupo de cuentas que coincide con el nombre
-        // Convertir tanto el nombre de la familia de Hiopos como el de Siigo a minúsculas
-        const itemFamilyLower = item.Familia.toLowerCase();
-        // Buscar el grupo de cuentas que coincide con el nombre en minúsculas
-        const accountGroup = inventoryGroups.find(group => group.name.toLowerCase() === itemFamilyLower);
-
-
-        // Si se encuentra el grupo de cuentas, obtener su id
-        // Si no encuentra un grupo exacto, intenta buscar uno llamado "Productos"
-        const fallbackGroup = inventoryGroups.find(group => group.name.toLowerCase() === 'productos');
         const accountGroupId = accountGroup?.id || fallbackGroup?.id || null;
 
-        return  {
-            code: item.RefArticulo,
-            account_group: accountGroupId, //Revisarlo porque no se sabe de donde tomarlo
-            name: item.Articulo,
+        const precio = typeof item.Precio === 'number'
+            ? item.Precio
+            : parseFloat(item.Precio) || 0;
+
+        const unidad = item.UnidadMedida || item.Unidad_medida || 'uds';
+
+        return {
+            code: item.RefArticulo || 'SIN-CODIGO',
+            account_group: accountGroupId,
+            name: item.Articulo || 'Artículo sin nombre',
             stock_control: false,
             active: true,
-            unit_label: item.UnidadMedida,
+            unit_label: unidad,
             taxes,
             prices: [
                 {
                     currency_code: 'COP',
                     price_list: [
                         {
-                            "position": 1,
-                            "value": Number(item.Precio.toFixed(2))
+                            position: 1,
+                            value: Number(precio.toFixed(2))
                         }
                     ]
                 }
             ]
-        }
+        };
     } catch (error) {
-        console.log('error armando la data del articulo')
-        throw error
+        console.log('❌ Error armando la data del artículo:', error.message);
+        throw error;
     }
-}
+};
 
 export const setItemInvoiceData = async (item) => {
     try {
