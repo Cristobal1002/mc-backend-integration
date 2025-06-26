@@ -642,14 +642,14 @@ export const purchaseValidator = async (data = null) => {
         for (const batch of batches) {
             for (const currentInvoice of batch) {
                 const { identification } = currentInvoice.core_data.supplier;
-                const { DetalleDocumento, Retenciones } = currentInvoice.hiopos_data;
+                const { DetalleDocumento, Retenciones, SudocProv } = currentInvoice.hiopos_data;
                 const { DetalleMediosdepago } = currentInvoice.hiopos_data;
                 const params = await parametrizationService.getParametrizationData();
                 const purchaseParam = params.data.find(param => param.type === 'purchases');
-
+                const docProvider = siigoService.parseProviderInvoice(SudocProv)
                 const invoiceData = {
                     date: DateTime.fromFormat(currentInvoice.hiopos_data.Fecha, "dd/MM/yyyy").toFormat("yyyy-MM-dd"),
-                    provider_invoice: currentInvoice.core_data.provider_invoice,
+                    provider_invoice: docProvider, //currentInvoice.core_data.provider_invoice,
                     observations: currentInvoice.core_data.observations,
                     discount_type: 'Percentage',
                     tax_included: purchaseParam.tax_included

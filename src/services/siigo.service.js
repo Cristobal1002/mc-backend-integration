@@ -206,17 +206,27 @@ export const getItemByCode = async (code) => {
 }
 
 
-const parseProviderInvoice = (input) => {
-    const match = input.match(/^([a-zA-Z0-9]*?)(\d+)$/);
+export const parseProviderInvoice = (input) => {
+    // Intentamos dividir por cualquiera de los delimitadores
+    const match = input.match(/^(.+)[\-\_\/\|](\d+)$/);
 
-    if (!match) {
-        return { prefix: input, number: 1 }; // Caso alfanumérico en el número
+    if (match) {
+        const prefix = match[1];
+        const number = parseInt(match[2], 10);
+        return { prefix, number };
     }
 
-    const prefix = match[1] || "FC"; // Si no hay prefijo, se usa "FC"
-    const number = parseInt(match[2], 10); // Convertimos el número a entero
+    // Fallback a la lógica alfanumérica compacta (ej. FA12345)
+    const fallback = input.match(/^([a-zA-Z0-9]*?)(\d+)$/);
 
-    return { prefix, number };
+    if (fallback) {
+        const prefix = fallback[1] || "FC";
+        const number = parseInt(fallback[2], 10);
+        return { prefix, number };
+    }
+
+    // Si no hay coincidencia, devolvemos todo como prefijo y número por defecto
+    return { prefix: input, number: 1 };
 };
 
 export const setSiigoPurchaseInvoiceData = async (data, params) => {
