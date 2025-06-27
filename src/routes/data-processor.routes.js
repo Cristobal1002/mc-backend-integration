@@ -7,3 +7,4 @@ dataProcessor.post(`/manual-purchases`, dataProcessorController.manualProcessing
 dataProcessor.post(`/manual-sales`, dataProcessorController.manualProcessingLote )
 dataProcessor.post(`/reprocessing`, dataProcessorController.dataReprocessing)
 dataProcessor.get(`/get-transaction`, dataProcessorController.getTransactionById)
+dataProcessor.delete(`/transactions`, dataProcessorController.deleteTransactionsById)

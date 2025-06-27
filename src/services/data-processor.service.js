@@ -1393,3 +1393,22 @@ export const resetTransactionState = async (ids = []) => {
         where: { id: { [Op.in]: ids } }
     });
 };
+
+export const deleteTransactions = async (ids) => {
+    try {
+        if (!Array.isArray(ids) || ids.length === 0) {
+            throw new Error('Debes proporcionar un arreglo de IDs');
+        }
+
+        const result = await model.TransactionModel.destroy({
+            where: {
+                id: ids
+            }
+        });
+
+        return { deletedCount: result };
+
+    } catch (error) {
+        throw error;
+    }
+}

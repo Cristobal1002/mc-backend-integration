@@ -37,3 +37,13 @@ export const getTransactionById = async (req, res, next) => {
         next(error)
     }
 }
+
+export const deleteTransactionsById = async (req, res, next) => {
+    const { ids } = req.body
+    try {
+        const response = await dataProcessorService.deleteTransactions(ids)
+        standardResponse(res,200, 'transacciones eliminadas satisfactoriamente', response)
+    } catch (error) {
+        next(error)
+    }
+}
