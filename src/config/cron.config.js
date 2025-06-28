@@ -2,13 +2,16 @@ import cron from 'node-cron';
 import {dataProcessorService} from "../services/index.js";
 import {parametrizationService} from "../services/index.js";
 import {model} from "../models/index.js";
+import { DateTime } from 'luxon';
+import {Op} from "sequelize";
 
 // Función auxiliar para calcular el rango de la hora anterior
 const getPreviousHourRange = () => {
-    const now = new Date();
-    const previousHour = new Date(now.getTime() - 60 * 60 * 16000); // Una hora antes
-    const startDate = previousHour.toISOString().split('T')[0];
-    const startHour = previousHour.getHours();
+    // Hora actual en Colombia
+    const now = DateTime.now().setZone('America/Bogota');
+    const previousHour = now.minus({ hours: 1 });
+    const startDate = previousHour.toISODate(); // yyyy-MM-dd
+    const startHour = previousHour.hour; // hora 0-23
     return { startDate, startHour };
 };
 
@@ -16,14 +19,27 @@ const getPreviousHourRange = () => {
 const processService = async (service, filters) => {
     try {
         console.log(`Procesando servicio: ${service}`);
-        await dataProcessorService.getHioposLote(service, filters, false, true);
-        console.log(`Creando lote para servicio de: ${service}`);
+        const { loteId } = await dataProcessorService.getHioposLote(service, filters, false, false); // runSync = false
+
+        // 🔄 Buscar transacciones creadas en ese lote
+        const transactions = await model.TransactionModel.findAll({
+            where: { lote_id: loteId, type: service }
+        });
+
+        if (transactions.length === 0) {
+            console.log(`[${service}] No se encontraron transacciones para validar.`);
+            return;
+        }
+
+        // ✅ Ejecutar validación + sincronización SOLO sobre transacciones del lote
+        const options = (service === 'purchases') ? { purchaseTransactions: transactions } : { salesTransactions: transactions };
+        await dataProcessorService.syncDataProcess(options);
+
+        console.log(`[${service}] Proceso completo (validación + sync)`);
     } catch (error) {
         console.error(`Error al procesar el servicio ${service}:`, error.message || error);
     }
 };
-
-// Función principal de la tarea
 const executeCronTask = async () => {
 
     try {
