@@ -3,12 +3,15 @@ import {reportsService} from "../services/index.js";
 
 export const getDailyStats = async (req, res, next) => {
     try {
-        const response = await reportsService.getDailyStats();
-        standardResponse(res,200, '', response.data )
+        const { startDate, endDate } = req.query;
+
+        const response = await reportsService.getDailyStats({ startDate, endDate });
+
+        standardResponse(res, 200, '', response.data);
     } catch (error) {
-        return next(error)
+        return next(error);
     }
-}
+};
 
 export const getPaginatedTransactions = async (req, res, next) => {
     try {

@@ -2,67 +2,59 @@ import axios from "axios";
 import {CustomError, handleServiceError} from "../errors/index.js";
 import {model} from "../models/index.js";
 import {literal, Op} from "sequelize";
+import {dateRange} from "../utils/index.js";
 
-export const getDailyStats = async () => {
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
+export const getDailyStats = async ({ startDate, endDate } = {}) => {
+    const { start, end } = dateRange.getLocalDateRange(startDate, endDate, 5); // UTC-5 (Colombia)
 
     try {
-        // Número de lotes procesados hoy
         const lotesProcesados = await model.LoteModel.count({
             where: {
                 processed_at: {
-                    [Op.between]: [todayStart, todayEnd]
+                    [Op.between]: [start, end]
                 }
             }
         });
 
-        // Número total de transacciones hoy
         const totalTransacciones = await model.TransactionModel.count({
             where: {
                 createdAt: {
-                    [Op.between]: [todayStart, todayEnd]
+                    [Op.between]: [start, end]
                 }
             }
         });
 
-        // Número de transacciones exitosas
         const transaccionesExitosas = await model.TransactionModel.count({
             where: {
                 createdAt: {
-                    [Op.between]: [todayStart, todayEnd]
+                    [Op.between]: [start, end]
                 },
                 status: "success"
             }
         });
 
-        // Número de transacciones fallidas
         const transaccionesFallidas = await model.TransactionModel.count({
             where: {
                 createdAt: {
-                    [Op.between]: [todayStart, todayEnd]
+                    [Op.between]: [start, end]
                 },
                 status: "failed"
             }
         });
 
         return {
-           data: {
-               lotesProcesados,
-               totalTransacciones,
-               transaccionesExitosas,
-               transaccionesFallidas}
+            data: {
+                lotesProcesados,
+                totalTransacciones,
+                transaccionesExitosas,
+                transaccionesFallidas
+            }
         };
-
     } catch (error) {
         console.error("Error obteniendo estadísticas:", error);
-        handleServiceError(error)
+        handleServiceError(error);
     }
-}
-
+};
 export async function getPaginatedTransactions({ page = 1, limit = 10, startDate, endDate, batchId, status, type }) {
     try {
         const whereCondition = {};
@@ -113,55 +105,28 @@ export async function getPaginatedTransactions({ page = 1, limit = 10, startDate
         throw new Error("Error obteniendo transacciones");
     }
 }
-export const getProcessedLotes = async ({
-                                            startDate = null,
-                                            endDate = null,
-                                            source = null, // "automatic" o "manual"
-                                            page = 1,
-                                            limit = 10
-                                        }) => {
-    // Si no se pasan fechas, toma el día actual por defecto
-    const start = startDate ? new Date(startDate) : new Date();
-    start.setHours(0, 0, 0, 0);
-
-    const end = endDate ? new Date(endDate) : new Date();
-    end.setHours(23, 59, 59, 999);
+export const getProcessedLotes = async ({ startDate, endDate, source = null, page = 1, limit = 10 }) => {
+    const { start, end } = dateRange.getLocalDateRange(startDate, endDate);
 
     const filters = {
         processed_at: { [Op.between]: [start, end] }
     };
-
-    if (source) {
-        filters.source = source;
-    }
+    if (source) filters.source = source;
 
     const { count, rows } = await model.LoteModel.findAndCountAll({
         where: filters,
         attributes: [
-            "id",
-            "type",
-            "source",
-            "filter",
-            "status",
-            "error",
-            "processed_at",
-            "transactions_count",
+            "id", "type", "source", "filter", "status", "error", "processed_at", "transactions_count",
             [literal(`"filter"->>'startDate'`), "processed_date"],
             [literal(`(
-                SELECT jsonb_path_query_first("filter"::jsonb, '$.filters[*].value') #>> '{}'
-            )`), "processed_time"],
+        SELECT jsonb_path_query_first("filter"::jsonb, '$.filters[*].value') #>> '{}'
+      )`), "processed_time"],
             [literal(`(
-                SELECT COUNT(*) 
-                FROM transactions 
-                WHERE transactions.lote_id = "LoteModel".id 
-                AND transactions.status = 'success'
-            )`), "successful_transactions"],
+        SELECT COUNT(*) FROM transactions WHERE transactions.lote_id = "LoteModel".id AND transactions.status = 'success'
+      )`), "successful_transactions"],
             [literal(`(
-                SELECT COUNT(*) 
-                FROM transactions 
-                WHERE transactions.lote_id = "LoteModel".id 
-                AND transactions.status = 'failed'
-            )`), "failed_transactions"]
+        SELECT COUNT(*) FROM transactions WHERE transactions.lote_id = "LoteModel".id AND transactions.status = 'failed'
+      )`), "failed_transactions"]
         ],
         limit,
         offset: (page - 1) * limit,
