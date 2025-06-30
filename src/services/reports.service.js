@@ -1,24 +1,22 @@
 import axios from "axios";
 import {CustomError, handleServiceError} from "../errors/index.js";
 import {model} from "../models/index.js";
-import {literal, Op} from "sequelize";
+import { sequelize } from '../database/index.js';
+import { Op, where, col, cast, literal } from 'sequelize';
 import {dateRange} from "../utils/index.js";
 
 export const getDailyStats = async ({ startDate, endDate } = {}) => {
-    const { start, end } = dateRange.getLocalDateRange(startDate, endDate, 5); // UTC-5 (Colombia)
-
     try {
+        const start = startDate || endDate;
+        const end = endDate || startDate;
+
         const lotesProcesados = await model.LoteModel.count({
-            where: {
-                processed_at: {
-                    [Op.between]: [start, end]
-                }
-            }
+            where: literal(`CAST("LoteModel"."filter"->>'startDate' AS DATE) BETWEEN '${start}' AND '${end}'`)
         });
 
         const totalTransacciones = await model.TransactionModel.count({
             where: {
-                createdAt: {
+                document_date: {
                     [Op.between]: [start, end]
                 }
             }
@@ -26,19 +24,19 @@ export const getDailyStats = async ({ startDate, endDate } = {}) => {
 
         const transaccionesExitosas = await model.TransactionModel.count({
             where: {
-                createdAt: {
+                document_date: {
                     [Op.between]: [start, end]
                 },
-                status: "success"
+                status: 'success'
             }
         });
 
         const transaccionesFallidas = await model.TransactionModel.count({
             where: {
-                createdAt: {
+                document_date: {
                     [Op.between]: [start, end]
                 },
-                status: "failed"
+                status: 'failed'
             }
         });
 
@@ -51,11 +49,10 @@ export const getDailyStats = async ({ startDate, endDate } = {}) => {
             }
         };
     } catch (error) {
-        console.error("Error obteniendo estadísticas:", error);
+        console.error('Error obteniendo estadísticas:', error);
         handleServiceError(error);
     }
-};
-export async function getPaginatedTransactions({ page = 1, limit = 10, startDate, endDate, batchId, status, type }) {
+};export async function getPaginatedTransactions({ page = 1, limit = 10, startDate, endDate, batchId, status, type }) {
     try {
         const whereCondition = {};
 
@@ -63,16 +60,10 @@ export async function getPaginatedTransactions({ page = 1, limit = 10, startDate
         if (status) whereCondition.status = status;
         if (type) whereCondition.type = type;
 
-        // Siempre aplicar filtro de fecha si viene startDate o endDate
-        const timeZoneOffset = 5 * 60 * 60 * 1000; // UTC-5 en milisegundos
-
         if (startDate || endDate) {
-            const start = startDate ? new Date(new Date(`${startDate}T00:00:00.000Z`).getTime() + timeZoneOffset) : new Date();
-            const end = endDate ? new Date(new Date(`${endDate}T23:59:59.999Z`).getTime() + timeZoneOffset) : new Date();
-
-            whereCondition.createdAt = {
-                [Op.between]: [start, end]
-            };
+            const start = startDate || endDate;
+            const end = endDate || startDate;
+            whereCondition.document_date = { [Op.between]: [start, end] };
         }
 
         const offset = (page - 1) * limit;
@@ -81,14 +72,13 @@ export async function getPaginatedTransactions({ page = 1, limit = 10, startDate
             where: whereCondition,
             limit,
             offset,
-            order: [["createdAt", "DESC"]],
-            raw: true // Retorna los datos como objetos planos
+            order: [["document_date", "DESC"]],
+            raw: true
         });
 
-        // Agregar siigo_document con el name de siigo_response si existe
         const transactions = data.map(transaction => ({
             ...transaction,
-            siigo_document: transaction.siigo_response ? transaction.siigo_response.name || null : null
+            siigo_document: transaction.siigo_response?.name || null
         }));
 
         return {
@@ -106,36 +96,49 @@ export async function getPaginatedTransactions({ page = 1, limit = 10, startDate
     }
 }
 export const getProcessedLotes = async ({ startDate, endDate, source = null, page = 1, limit = 10 }) => {
-    const { start, end } = dateRange.getLocalDateRange(startDate, endDate);
+    const filters = [];
 
-    const filters = {
-        processed_at: { [Op.between]: [start, end] }
-    };
-    if (source) filters.source = source;
+    if (source) filters.push(`l."source" = '${source}'`);
+    if (startDate || endDate) {
+        const start = startDate || endDate;
+        const end = endDate || startDate;
+        filters.push(`(l."filter"->>'startDate')::date BETWEEN '${start}' AND '${end}'`);
+    }
 
-    const { count, rows } = await model.LoteModel.findAndCountAll({
-        where: filters,
-        attributes: [
-            "id", "type", "source", "filter", "status", "error", "processed_at", "transactions_count",
-            [literal(`"filter"->>'startDate'`), "processed_date"],
-            [literal(`(
-        SELECT jsonb_path_query_first("filter"::jsonb, '$.filters[*].value') #>> '{}'
-      )`), "processed_time"],
-            [literal(`(
-        SELECT COUNT(*) FROM transactions WHERE transactions.lote_id = "LoteModel".id AND transactions.status = 'success'
-      )`), "successful_transactions"],
-            [literal(`(
-        SELECT COUNT(*) FROM transactions WHERE transactions.lote_id = "LoteModel".id AND transactions.status = 'failed'
-      )`), "failed_transactions"]
-        ],
-        limit,
-        offset: (page - 1) * limit,
-        order: [["processed_at", "DESC"]]
-    });
+    const whereClause = filters.length
+        ? `WHERE ${filters.join(' AND ')} AND l."deletedAt" IS NULL`
+        : `WHERE l."deletedAt" IS NULL`;
+
+    // Consulta principal
+    const [results] = await sequelize.query(`
+        SELECT
+            l.id, l.type, l.source, l.filter, l.status, l.error, l.processed_at, l.transactions_count,
+            l.filter->>'startDate' AS processed_date,
+            (
+                SELECT jsonb_path_query_first(l.filter::jsonb, '$.filters[*].value') #>> '{}'
+            ) AS processed_time,
+            (
+                SELECT COUNT(*) FROM transactions t WHERE t.lote_id = l.id AND t.status = 'success'
+            ) AS successful_transactions,
+            (
+                SELECT COUNT(*) FROM transactions t WHERE t.lote_id = l.id AND t.status = 'failed'
+            ) AS failed_transactions
+        FROM lotes l
+            ${whereClause}
+        ORDER BY l.processed_at DESC
+        LIMIT ${limit}
+            OFFSET ${(page - 1) * limit}
+    `);
+
+    // Conteo total
+    const countWhere = filters.length ? `WHERE ${filters.join(' AND ')} AND "deletedAt" IS NULL` : `WHERE "deletedAt" IS NULL`;
+    const [[{ count }]] = await sequelize.query(`
+        SELECT COUNT(*)::int FROM lotes l ${countWhere}
+    `);
 
     return {
         data: {
-            lotes: rows,
+            lotes: results,
             total: count,
             pages: Math.ceil(count / limit),
             currentPage: page

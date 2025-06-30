@@ -27,6 +27,10 @@ TransactionModel.init({
         type: DataTypes.STRING,
         allowNull: false
     },
+    document_date: {
+        type: DataTypes.DATEONLY,
+        allowNull: true
+    },
     hiopos_data: {
         type: DataTypes.JSONB,
         allowNull: false
