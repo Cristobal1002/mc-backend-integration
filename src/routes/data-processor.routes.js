@@ -8,3 +8,4 @@ dataProcessor.post(`/manual-sales`, dataProcessorController.manualProcessingLote
 dataProcessor.post(`/reprocessing`, dataProcessorController.dataReprocessing)
 dataProcessor.get(`/get-transaction`, dataProcessorController.getTransactionById)
 dataProcessor.delete(`/transactions`, dataProcessorController.deleteTransactionsById)
+dataProcessor.put(`/transactions/:id/siigo-body`, dataProcessorController.updateTransactionById)

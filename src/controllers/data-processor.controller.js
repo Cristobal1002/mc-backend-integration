@@ -47,3 +47,15 @@ export const deleteTransactionsById = async (req, res, next) => {
         next(error)
     }
 }
+
+export const updateTransactionById = async (req, res, next) => {
+    const {id} = req.params;
+    const data = req.body
+
+    try {
+        const response = await  dataProcessorService.updateTransaction(id, data)
+        standardResponse(res,200, 'transaccion actualizada satisfactoriamente', response)
+    } catch (error) {
+        next(error)
+    }
+}

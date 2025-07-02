@@ -1119,3 +1119,30 @@ export const deleteTransactions = async (ids) => {
         throw error;
     }
 }
+
+export const updateTransaction = async (id, data) => {
+    try {
+        console.log('Servicio de update', id, data)
+        const [affectedCount, affectedRows] = await model.TransactionModel.update(
+            {siigo_body: data},
+            {where: {id} }
+        )
+
+        console.log('Lineas afectadas',affectedCount)
+        if (affectedCount > 0){
+            try {
+                const creation = await siigoService.createSaleInvoice(data);
+                if (creation) {
+                    await model.TransactionModel.update({ status: 'success', siigo_response: creation }, { where: { id } });
+                }
+                return creation
+            } catch (errorInvoice) {
+                console.error('Error al crear la factura', errorInvoice);
+                await model.TransactionModel.update({ status: 'failed', error: errorInvoice.data }, { where: { id } });
+            }
+        }
+
+    } catch (error) {
+        throw (error)
+    }
+}
