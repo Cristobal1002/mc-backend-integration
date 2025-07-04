@@ -359,6 +359,7 @@ export const purchaseValidator = async (data = null) => {
                     provider_invoice: docProvider, //currentInvoice.core_data.provider_invoice,
                     observations: currentInvoice.core_data.observations,
                     discount_type: 'Percentage',
+                    internal: currentInvoice.hiopos_data.Numero,
                     tax_included: purchaseParam.tax_included
                 };
 
@@ -1122,27 +1123,63 @@ export const deleteTransactions = async (ids) => {
 
 export const updateTransaction = async (id, data) => {
     try {
-        console.log('Servicio de update', id, data)
-        const [affectedCount, affectedRows] = await model.TransactionModel.update(
-            {siigo_body: data},
-            {where: {id} }
-        )
+        console.log('Servicio de update', id, data);
 
-        console.log('Lineas afectadas',affectedCount)
-        if (affectedCount > 0){
-            try {
-                const creation = await siigoService.createSaleInvoice(data);
-                if (creation) {
-                    await model.TransactionModel.update({ status: 'success', siigo_response: creation }, { where: { id } });
-                }
-                return creation
-            } catch (errorInvoice) {
-                console.error('Error al crear la factura', errorInvoice);
-                await model.TransactionModel.update({ status: 'failed', error: errorInvoice.data }, { where: { id } });
+        // Paso 1: Actualizar el siigo_body
+        const [affectedCount] = await model.TransactionModel.update(
+            { siigo_body: data },
+            { where: { id } }
+        );
+
+        console.log('Líneas afectadas:', affectedCount);
+
+        if (affectedCount === 0) {
+            throw new Error(`No se encontró ninguna transacción con id ${id}`);
+        }
+
+        // Paso 2: Consultar la transacción para obtener el tipo
+        const transaction = await model.TransactionModel.findByPk(id);
+        if (!transaction) {
+            throw new Error(`Transacción no encontrada para id ${id}`);
+        }
+
+        const type = transaction.type;
+
+        if (!type) {
+            throw new Error(`Tipo de transacción no definido para id ${id}`);
+        }
+
+        // Paso 3: Llamar al servicio correspondiente
+        let creation;
+
+        try {
+            if (type === 'sales') {
+                creation = await siigoService.createSaleInvoice(data);
+            } else if (type === 'purchases') {
+                creation = await siigoService.createPurchaseInvoice(data);
+            } else {
+                throw new Error(`Tipo de transacción desconocido: ${type}`);
             }
+
+            // Paso 4: Si todo va bien, actualizar status a success
+            await model.TransactionModel.update(
+                { status: 'success', siigo_response: creation },
+                { where: { id } }
+            );
+
+            return creation;
+
+        } catch (errorInvoice) {
+            console.error('Error al crear la factura:', errorInvoice?.data || errorInvoice);
+
+            await model.TransactionModel.update(
+                { status: 'failed', error: errorInvoice?.data || errorInvoice },
+                { where: { id } }
+            );
         }
 
     } catch (error) {
-        throw (error)
+        console.error('Error general en updateTransaction:', error);
+        throw error;
     }
-}
+};
