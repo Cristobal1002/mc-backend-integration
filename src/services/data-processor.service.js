@@ -265,7 +265,7 @@ export const syncDataProcess = async ({ purchaseTransactions = null, salesTransa
             await saleInvoiceSync(salesTransactions);
         }*/
         console.log('Acceso reprocesamiento de compras', purchaseTransactions !== null, purchaseTransactions.length)
-        if (purchaseTransactions !== null && purchaseTransactions.length > 0) {
+        if (purchaseTransactions !== null || (Array.isArray(purchaseTransactions) && purchaseTransactions.length > 0) ) {
 
             await purchaseValidator(purchaseTransactions);
 
@@ -279,7 +279,7 @@ export const syncDataProcess = async ({ purchaseTransactions = null, salesTransa
             await purchaseInvoiceSync(refreshedPurchases);
         }
 
-        if (salesTransactions !== null && salesTransactions.length > 0) {
+        if (salesTransactions !== null || (Array.isArray(salesTransactions) && salesTransactions.length > 0)) {
             await salesValidator(salesTransactions);
 
             const refreshedSales = await model.TransactionModel.findAll({
