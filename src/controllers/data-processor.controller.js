@@ -59,3 +59,13 @@ export const updateTransactionById = async (req, res, next) => {
         next(error)
     }
 }
+
+export const reprocessLote = async (req, res, next) => {
+    const {lote} = req.body
+    try {
+        const response = await dataProcessorService.reprocessLote(lote)
+        standardResponse(res,200, 'Lote reprocesado satisfactoriamente', response)
+    } catch (error) {
+        next(error)
+    }
+}

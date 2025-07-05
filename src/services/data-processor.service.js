@@ -264,7 +264,6 @@ export const syncDataProcess = async ({ purchaseTransactions = null, salesTransa
             await salesValidator(salesTransactions);
             await saleInvoiceSync(salesTransactions);
         }*/
-        console.log('Acceso reprocesamiento de compras', purchaseTransactions !== null, purchaseTransactions.length)
         if (purchaseTransactions !== null || (Array.isArray(purchaseTransactions) && purchaseTransactions.length > 0) ) {
 
             await purchaseValidator(purchaseTransactions);
@@ -1182,6 +1181,41 @@ export const updateTransaction = async (id, data) => {
 
     } catch (error) {
         console.error('Error general en updateTransaction:', error);
+        throw error;
+    }
+};
+
+export const reprocessLote = async (loteId) => {
+    try {
+        if (!loteId) {
+            throw new Error('Debe proporcionar un ID de lote válido.');
+        }
+
+        const transactions = await model.TransactionModel.findAll({
+            where: {
+                lote_id: loteId,
+                status: 'validation'
+            }
+        });
+
+        if (!transactions.length) {
+            console.warn(`[REPROCESS LOTE] No hay transacciones en estado 'validation' para el lote ${loteId}.`);
+            return;
+        }
+
+        const purchaseTransactions = transactions.filter(tx => tx.type === 'purchases');
+        const salesTransactions = transactions.filter(tx => tx.type === 'sales');
+
+        console.log(`[REPROCESS LOTE ${loteId}] Compras: ${purchaseTransactions.length}, Ventas: ${salesTransactions.length}`);
+
+        await syncDataProcess({
+            purchaseTransactions: purchaseTransactions.length > 0 ? purchaseTransactions : null,
+            salesTransactions: salesTransactions.length > 0 ? salesTransactions : null
+        });
+
+        console.log(`[REPROCESS LOTE ${loteId}] Finalizado correctamente.`);
+    } catch (error) {
+        console.error(`[REPROCESS LOTE] Error reprocesando el lote ${loteId}:`, error);
         throw error;
     }
 };
