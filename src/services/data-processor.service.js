@@ -1207,7 +1207,8 @@ export const reprocessLote = async (loteId) => {
         const salesTransactions = transactions.filter(tx => tx.type === 'sales');
 
         console.log(`[REPROCESS LOTE ${loteId}] Compras: ${purchaseTransactions.length}, Ventas: ${salesTransactions.length}`);
-
+        console.log('compras en reproceso de lote', purchaseTransactions)
+        console.log('ventas en reproceso de lote', salesTransactions)
         await syncDataProcess({
             purchaseTransactions: purchaseTransactions.length > 0 ? purchaseTransactions : null,
             salesTransactions: salesTransactions.length > 0 ? salesTransactions : null
