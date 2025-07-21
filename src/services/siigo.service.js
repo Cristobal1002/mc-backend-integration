@@ -787,11 +787,13 @@ export const setItemDataForInvoice = async (item, type) => {
                 return nombre.includes('fuente');
             })
             .map(ret => ({
-                NombreImpuesto: ret.Retencion,
-                PorcentajeImpuesto: ret['Porcentaje_Retencion'] ?? 0,
+                Nombre_Impuesto: ret.Retencion,
+                Porcentaje_Impuesto: ret['Porcentaje_Retencion'] ?? 0,
             }));
 
         const allTributaries = [...impuestosCombinados, ...retefuentes];
+
+        console.log('All tributes:', allTributaries)
 
         const taxes = allTributaries.length > 0
             ? await getTaxesByName(allTributaries)

@@ -566,8 +566,8 @@ export const purchaseValidator = async (data = null) => {
 
                     const retencionesSiigo = retencionesFiltradas.length > 0
                         ? await getTaxesByName(retencionesFiltradas.map(r => ({
-                            NombreImpuesto: r.Nombre_Retencion,
-                            PorcentajeImpuesto: r.Porcentaje,
+                            Nombre_Impuesto: r.Nombre_Retencion,
+                            Porcentaje_Impuesto: r.Porcentaje,
                         })))
                         : [];
 
