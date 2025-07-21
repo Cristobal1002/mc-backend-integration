@@ -23,7 +23,7 @@ export const getHioposLote = async (type, filter, isManual = false, runSync = fa
 
         console.log(`[${type.toUpperCase()}] Datos recibidos de Hiopos:`, hioposArray.length);
         console.log(`[${type.toUpperCase()}] Primeros documentos:`, hioposArray.slice(0, 3).map(i => ({
-            doc: i.SerieNumero || i['Serie/Numero'],
+            doc: i.Serie_Numero || i['Serie/Numero'],
             tipo: i.TipoDocumento
         })));
 
@@ -106,10 +106,10 @@ export const processLoteTransactions = async (type, lote, loteHeader) => {
             try {
                 const params = await parametrizationService.getParametrizationData();
 
-                const rawTipo = invoice.TipoDocumento;
+                const rawTipo = invoice.Tipo_Documento;
                 const tipoNormalizado = normalizeText(rawTipo);
 
-                console.log(`[TX LOOP] Documento: ${invoice.SerieNumero || invoice['Serie/Numero']} - Tipo: ${rawTipo} (normalizado: ${tipoNormalizado})`);
+                console.log(`[TX LOOP] Documento: ${invoice.Serie_Numero || invoice['Serie_Numero']} - Tipo: ${rawTipo} (normalizado: ${tipoNormalizado})`);
 
                 // Detección por fragmentos clave (tolerante a errores de escritura)
                 const isCompra = tipoNormalizado.includes('factura') &&
@@ -169,7 +169,7 @@ export const processLoteTransactions = async (type, lote, loteHeader) => {
 
 /*export const registerTransaction = async (type, hioposData, coreData, loteId) => {
     try {
-        const documentNumber = hioposData.SerieNumero || hioposData['Serie/Numero'];
+        const documentNumber = hioposData.Serie_Numero || hioposData['Serie/Numero'];
         const documentDate = hioposData.Fecha
 
         // Verificar si ya existe una transacción con este número de documento
@@ -204,7 +204,7 @@ export const processLoteTransactions = async (type, lote, loteHeader) => {
 
 export const registerTransaction = async (type, hioposData, coreData, loteId) => {
     try {
-        const documentNumber = hioposData.SerieNumero || hioposData['Serie/Numero'];
+        const documentNumber = hioposData.Serie_Numero || hioposData['Serie/Numero'];
         const rawDate = hioposData.Fecha;
 
         let parsedDate = null;
@@ -350,11 +350,11 @@ export const purchaseValidator = async (data = null) => {
         for (const batch of batches) {
             for (const currentInvoice of batch) {
                 const { identification } = currentInvoice.core_data.supplier;
-                const { DetalleDocumento, Retenciones, SudocProv } = currentInvoice.hiopos_data;
-                const { DetalleMediosdepago } = currentInvoice.hiopos_data;
+                const { Detalle_Documento, Retenciones, Su_doc_Prov } = currentInvoice.hiopos_data;
+                const { Detalle_Medios_de_pago } = currentInvoice.hiopos_data;
                 const params = await parametrizationService.getParametrizationData();
                 const purchaseParam = params.data.find(param => param.type === 'purchases');
-                const docProvider = siigoService.parseProviderInvoice(SudocProv)
+                const docProvider = siigoService.parseProviderInvoice(Su_doc_Prov)
                 const invoiceData = {
                     date: DateTime.fromFormat(currentInvoice.hiopos_data.Fecha, "dd/MM/yyyy").toFormat("yyyy-MM-dd"),
                     provider_invoice: docProvider, //currentInvoice.core_data.provider_invoice,
@@ -447,17 +447,17 @@ export const purchaseValidator = async (data = null) => {
 
                     const itemsValidationResults = [];
 
-                    for (const item of DetalleDocumento) {
-                        const siigoItem = await siigoService.getItemByCode(item.RefArticulo);
+                    for (const item of Detalle_Documento) {
+                        const siigoItem = await siigoService.getItemByCode(item.Ref_Articulo);
 
                         if (!siigoItem || siigoItem.results.length === 0) {
                             try {
                                 const createdItem = await siigoService.createSiigoItem(item);
-                                itemsValidationResults.push({ item: item.RefArticulo, status: 'success', details: createdItem });
+                                itemsValidationResults.push({ item: item.Ref_Articulo, status: 'success', details: createdItem });
                             } catch (error) {
-                                console.error('Error en creación de artículo:', item.RefArticulo, error);
+                                console.error('Error en creación de artículo:', item.Ref_Articulo, error);
                                 itemsValidationResults.push({
-                                    item: item.RefArticulo,
+                                    item: item.Ref_Articulo,
                                     status: 'failed',
                                     details: {
                                         error: error.data?.Errors || error.message
@@ -466,7 +466,7 @@ export const purchaseValidator = async (data = null) => {
                             }
                         } else {
                             itemsValidationResults.push({
-                                item: item.RefArticulo,
+                                item: item.Ref_Articulo,
                                 status: 'success',
                                 details: siigoItem.results[0],
                             });
@@ -486,7 +486,7 @@ export const purchaseValidator = async (data = null) => {
                     let taxValidationStatus = 'success';
 
                     if (itemsStatus === 'success') {
-                        for (const item of DetalleDocumento) {
+                        for (const item of Detalle_Documento) {
                             const itemResult = await siigoService.setItemDataForInvoice(item, currentInvoice.type);
                             if (!itemResult) continue;
 
@@ -511,25 +511,26 @@ export const purchaseValidator = async (data = null) => {
                     }
 
                     const paymentsValidationResults = [];
-                    for (const payment of DetalleMediosdepago) {
+                    for (const payment of Detalle_Medios_de_pago) {
                         try {
                             const siigoMethod = await siigoService.getPaymentsByName('FC', payment);
+                            console.log('Siigo Method:', siigoMethod)
                             const calculatePayment = purchaseParam ? purchaseParam.calculate_payment : false;
 
                             if (!siigoMethod || !siigoMethod.id) {
                                 paymentsValidationResults.push({
                                     id: null,
-                                    name: payment.MedioPago,
+                                    name: payment.Medio_Pago,
                                     value: payment.Importe,
                                     status: 'failed',
-                                    details: [`El método de pago "${payment.MedioPago}" no existe en Siigo`],
+                                    details: [`El método de pago "${payment.Medio_Pago}" no existe en Siigo`],
                                 });
                             } else {
                                 paymentsValidationResults.push({
                                     id: siigoMethod.id,
                                     name: siigoMethod.name,
                                     value: calculatePayment ? currentInvoice.amount : payment.Importe,
-                                    due_date: DateTime.fromFormat(payment.FechaVencimiento, "dd/MM/yyyy").toFormat("yyyy-MM-dd"),
+                                    due_date: DateTime.fromFormat(payment.Fecha_Vencimiento, "dd/MM/yyyy").toFormat("yyyy-MM-dd"),
                                     status: 'success',
                                     details: [`Método de pago "${siigoMethod.name}" procesado correctamente.`],
                                 });
@@ -537,11 +538,11 @@ export const purchaseValidator = async (data = null) => {
                         } catch (error) {
                             paymentsValidationResults.push({
                                 id: null,
-                                name: payment.MedioPago,
+                                name: payment.Medio_Pago,
                                 value: payment.Importe,
-                                due_date: DateTime.fromFormat(payment.FechaVencimiento, "dd/MM/yyyy").toFormat("yyyy-MM-dd"),
+                                due_date: DateTime.fromFormat(payment.Fecha_Vencimiento, "dd/MM/yyyy").toFormat("yyyy-MM-dd"),
                                 status: 'failed',
-                                details: [`Error procesando el método de pago "${payment.MedioPago}"`],
+                                details: [`Error procesando el método de pago "${payment.Medio_Pago}"`],
                             });
                         }
                         await delay(rateLimitDelay);
@@ -557,15 +558,15 @@ export const purchaseValidator = async (data = null) => {
                     invoiceData.items = siigoItem;
 
                     // 🆕 Añadir retenciones globales (reteICA, reteIVA)
-                    const retencionesDocumento = currentInvoice.hiopos_data.RetencionesDocumento ?? [];
+                    const retencionesDocumento = currentInvoice.hiopos_data.Retenciones_Documento ?? [];
                     const retencionesFiltradas = retencionesDocumento.filter(ret => {
-                        const nombre = ret.NombreRetencion?.toLowerCase() ?? '';
+                        const nombre = ret.Nombre_Retencion?.toLowerCase() ?? '';
                         return !nombre.includes('fuente');
                     });
 
                     const retencionesSiigo = retencionesFiltradas.length > 0
                         ? await getTaxesByName(retencionesFiltradas.map(r => ({
-                            NombreImpuesto: r.NombreRetencion,
+                            NombreImpuesto: r.Nombre_Retencion,
                             PorcentajeImpuesto: r.Porcentaje,
                         })))
                         : [];
@@ -574,7 +575,7 @@ export const purchaseValidator = async (data = null) => {
                         id: ret.id,
                         name: ret.name,
                         percentage: ret.percentage,
-                        value: -Math.abs(retencionesFiltradas[idx].ImporteRetenido ?? 0),
+                        value: -Math.abs(retencionesFiltradas[idx].Importe_Retenido ?? 0),
                         status: ret.status,
                     }));
 
@@ -668,8 +669,7 @@ export const salesValidator = async (data = null) => {
         for (const batch of batches) {
             for (const currentInvoice of batch) {
                 const { identification } = currentInvoice.core_data.customer;
-                const { DetalleDocumento } = currentInvoice.hiopos_data;
-                const { MedioPago } = currentInvoice.hiopos_data;
+                const { Medio_Pago, Detalle_Documento, Detalle_Totales } = currentInvoice.hiopos_data;
                 const invoiceDate = DateTime.fromISO(currentInvoice.hiopos_data.Fecha);
                 const dueDate = invoiceDate.plus({ days: 30 }).toISODate();
 
@@ -777,8 +777,8 @@ export const salesValidator = async (data = null) => {
 
                     const itemsValidationResults = [];
 
-                    for (const item of DetalleDocumento) {
-                        const ref = item.RefArticulo;
+                    for (const item of Detalle_Documento) {
+                        const ref = item.Ref_Articulo;
                         const siigoItem = await siigoService.getItemByCode(ref);
                         if (!siigoItem || siigoItem.results.length === 0) {
                             try {
@@ -808,16 +808,16 @@ export const salesValidator = async (data = null) => {
                         // ✅ Validar modificadores (sin detener el flujo)
                         if (Array.isArray(item.Modificadores_Articulo)) {
                             for (const mod of item.Modificadores_Articulo) {
-                                const modRef = mod.Referencia || mod.RefArticulo;
+                                const modRef = mod.Referencia || mod.Ref_Articulo;
                                 if (!modRef || mod.Precio <= 0) continue;
 
                                 const dummyItem = {
-                                    RefArticulo: modRef,
+                                    Ref_Articulo: modRef,
                                     Articulo: mod.Articulo,
                                     Precio: mod.Precio,
                                     Unidades: mod.Unidades,
-                                    DetalleImpuesto: [],
-                                    RetencionesArticulo: [],
+                                    Detalle_Impuesto: [],
+                                    Retenciones_Articulo: [],
                                     Cargos: [],
                                     Descuento: 0
                                 };
@@ -861,7 +861,7 @@ export const salesValidator = async (data = null) => {
 
                     let siigoItem = [];
 
-                    for (const item of DetalleDocumento) {
+                    for (const item of Detalle_Documento) {
                         const formattedItem = await siigoService.setItemDataForInvoice(item, 'sales');
                         if (formattedItem) siigoItem.push(formattedItem);
 
@@ -870,7 +870,7 @@ export const salesValidator = async (data = null) => {
                                 if ((mod.Precio ?? 0) <= 0) continue;
 
                                 const adaptedMod = {
-                                    RefArticulo: mod.Referencia || mod.RefArticulo,
+                                    Ref_Articulo: mod.Referencia || mod.Ref_Articulo,
                                     Articulo: mod.Articulo,
                                     Unidades: mod.Unidades,
                                     Precio: mod.Precio,
@@ -893,29 +893,29 @@ export const salesValidator = async (data = null) => {
                         throw new Error('No se encontraron ítems válidos para facturar');
                     }
 
-                    const propina = MedioPago.find(p => p.Tipo && p.Tipo.toLowerCase() === 'propina');
+                    const propina = Detalle_Totales.Entrada_Propina //Medio_Pago.find(p => p.Tipo && p.Tipo.toLowerCase() === 'propina');
                     if (propina) {
                         siigoItem.push({
                             code: 'PROP01',
                             type: 'Service',
                             description: 'Propina',
                             quantity: 1,
-                            taxed_price: propina.Valor
+                            taxed_price: propina.Valor_Propina
                         });
                     }
 
 
                     const paymentsValidationResults = [];
-                    for (const payment of MedioPago) {
+                    for (const payment of Medio_Pago) {
                         try {
                             const siigoMethod = await siigoService.getPaymentsByName('FV', payment);
                             if (!siigoMethod || !siigoMethod.id) {
                                 paymentsValidationResults.push({
                                     id: null,
-                                    name: payment.MedioDePago,
+                                    name: payment.Medio_De_Pago,
                                     value: payment.Valor,
                                     status: 'failed',
-                                    details: [`El método de pago "${payment.MedioDePago}" no existe en Siigo`],
+                                    details: [`El método de pago "${payment.Medio_De_Pago}" no existe en Siigo`],
                                 });
                             } else {
                                 paymentsValidationResults.push({
@@ -930,10 +930,10 @@ export const salesValidator = async (data = null) => {
                         } catch (error) {
                             paymentsValidationResults.push({
                                 id: null,
-                                name: payment.MedioDePago,
+                                name: payment.Medio_De_Pago,
                                 value: payment.Valor,
                                 status: 'failed',
-                                details: [`Error procesando el método de pago "${payment.MedioDePago}"`],
+                                details: [`Error procesando el método de pago "${payment.Medio_De_Pago}"`],
                             });
                         }
                         await delay(rateLimitDelay);

@@ -240,20 +240,20 @@ export const setSiigoPurchaseInvoiceData = async (data, params) => {
     return data.map(invoice => {
         let providerInvoice;
         try {
-            providerInvoice = parseProviderInvoice(invoice.SudocProv); // Intenta parsear SudocProv
+            providerInvoice = parseProviderInvoice(invoice.Su_doc_Prov); // Intenta parsear Su_doc_Prov
         } catch (error) {
-            console.error(`Error procesando SudocProv: ${invoice.SudocProv}. Usando valores por defecto.`);
+            console.error(`Error procesando Su_doc_Prov: ${invoice.Su_doc_Prov}. Usando valores por defecto.`);
         }
 
         // Calcular amount dependiendo de la parametrización, redondeado a 2 decimales
         let amount
         if(calculatePayment && taxesInCalculation){
-            amount = invoice.DetalleDocumento.reduce((sum, item) => sum + (item.Precio * item.Unidades), 0).toFixed(2);
+            amount = invoice.Detalle_Documento.reduce((sum, item) => sum + (item.Precio * item.Unidades), 0).toFixed(2);
         } else {
-            amount = invoice.DetalleDocumento.reduce((sum, item) => {
+            amount = invoice.Detalle_Documento.reduce((sum, item) => {
                 const basePrice = item.Precio * item.Unidades; // Precio antes de impuestos
-                const totalTax = item.DetalleImpuesto.reduce((taxSum, tax) => {
-                    return taxSum + (basePrice * (parseFloat(tax.PorcentajeImpuesto) / 100));
+                const totalTax = item.Detalle_Impuesto.reduce((taxSum, tax) => {
+                    return taxSum + (basePrice * (parseFloat(tax.Porcentaje_Impuesto) / 100));
                 }, 0);
                 return sum + basePrice + totalTax;
             }, 0).toFixed(2);
@@ -263,7 +263,7 @@ export const setSiigoPurchaseInvoiceData = async (data, params) => {
         /*
         // Cálculo de amount incluyendo impuestos (comentado para uso futuro)
         if (calculatePayment) {
-            amount = invoice.DetalleDocumento.reduce((sum, item) => {
+            amount = invoice.Detalle_Documento.reduce((sum, item) => {
                 const basePrice = item.Precio * item.Unidades; // Precio antes de impuestos
                 const totalTax = item.DetalleImpuesto.reduce((taxSum, tax) => {
                     return taxSum + (basePrice * (parseFloat(tax.PorcentajeImpuesto) / 100));
@@ -279,22 +279,22 @@ export const setSiigoPurchaseInvoiceData = async (data, params) => {
                 id: process.env.SIIGO_PURCHASE_ID
             },
             supplier: {
-                identification: invoice.DetalleProveedor.Nif
+                identification: invoice.Detalle_Proveedor.Nif
             },
             cost_center: invoice.Almacen,
             provider_invoice: providerInvoice, // Asignar el objeto parseado
             observations: `Factura de origen hiopos # ${invoice.Serie}/${invoice.Numero}`,
-            items: invoice.DetalleDocumento.map(item => ({
-                code: item.RefArticulo,
-                description: item.RefArticulo,
+            items: invoice.Detalle_Documento.map(item => ({
+                code: item.Ref_Articulo,
+                description: item.Ref_Articulo,
                 quantity: item.Unidades,
                 price: item.Precio,
-                taxes: item.DetalleImpuesto.map(tax => ({
-                    id: tax.NombreImpuesto
+                taxes: item.Detalle_Impuesto.map(tax => ({
+                    id: tax.Nombre_Impuesto
                 }))
             })),
-            payments: invoice.DetalleMediosdepago.map(payment => ({
-                id: payment.MedioPago,
+            payments: invoice.Detalle_Medios_de_pago.map(payment => ({
+                id: payment.Medio_Pago,
                 value: payment.Importe
             })),
             amount
@@ -309,16 +309,16 @@ export const setSiigoSalesInvoiceData = async (data, params) => {
             id: process.env.SIIGO_SALES_ID
         },
         customer: {
-            identification: invoice.DatosCliente.Nif
+            identification: invoice.Datos_Cliente.Nif
         },
-        items: invoice.DetalleDocumento.map(item => ({
-            code: item.RefArticulo,
+        items: invoice.Detalle_Documento.map(item => ({
+            code: item.Ref_Articulo,
             quantity: item.Unidades,
             price: item.Precio,
             discount: item. Descuento
         })),
-        payments: invoice.MedioPago.map(payment => ({
-            id: payment.MedioDePago,
+        payments: invoice.Medio_Pago.map(payment => ({
+            id: payment.Medio_De_Pago,
             value: payment.Valor
         })),
         observations: `Integrado automaticamente, documento Hiopos: ${invoice.Serie}/${invoice.Numero}`
@@ -326,7 +326,7 @@ export const setSiigoSalesInvoiceData = async (data, params) => {
 }
 export const setItemCreationData = async (item) => {
     try {
-        const taxes = await getTaxesByName(item.DetalleImpuesto || item.Impuestos || []);
+        const taxes = await getTaxesByName(item.Detalle_Impuesto || item.Impuestos || []);
 
         const inventoryGroups = await getInventoryGroupsWithCache();
         const familyName = item.Familia || 'MODIFICADORES'; // fallback
@@ -349,7 +349,7 @@ export const setItemCreationData = async (item) => {
         const unidad = item.UnidadMedida || item.Unidad_medida || 'uds';
 
         return {
-            code: item.RefArticulo || 'SIN-CODIGO',
+            code: item.Ref_Articulo || 'SIN-CODIGO',
             account_group: accountGroupId,
             name: item.Articulo || 'Artículo sin nombre',
             stock_control: false,
@@ -386,11 +386,11 @@ export const getTaxesByName = async (hioposTaxes) => {
     const taxList = await getTaxesWithCache();
 
     return hioposTaxes.map(hioposTax => {
-        const rawName = [hioposTax.NombreImpuesto, hioposTax.Descripcion, hioposTax.NombreRetencion]
+        const rawName = [hioposTax.Nombre_Impuesto, hioposTax.Descripcion, hioposTax.Retenciones_Articulo]
             .find(name => typeof name === 'string' && name.trim().length > 0);
 
         let taxName = rawName?.trim();
-        const taxPercentage = hioposTax.PorcentajeImpuesto ?? hioposTax.Porcentaje;
+        const taxPercentage = hioposTax.Porcentaje_Impuesto ?? hioposTax.Porcentaje_Retencion;
         if (!taxName) return null;
         if(taxName === 'EXENTOS') taxName = 'IVA 0%';
         const normalizedTaxName = taxName.toLowerCase();
@@ -580,16 +580,28 @@ const getSiigoPaymentMethods = async (documentType) => {
 }
 
 export const getPaymentsByName = async (type, hioposPayment) => {
-    const normalizeText = (text) => text?.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+    const normalizeText = (text) =>
+        text?.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+
     const paymentData = await getPaymentMethodsWithCache(type);
 
-    const paymentProperty = type === 'FC' ? 'MedioPago' : 'MedioDePago';
+    const paymentProperty = type === 'FC' ? 'Medio_Pago' : 'Medio_De_Pago';
     const valueProperty = type === 'FC' ? 'Importe' : 'Valor';
     const normalizedHioposPayment = normalizeText(hioposPayment[paymentProperty]);
 
+    console.log('Data pagos en siigo', paymentData)
+    console.log('Nombre del metodo de pago', normalizedHioposPayment)
+    paymentData.payments.forEach(p => {
+        if (normalizeText(p.name) === normalizedHioposPayment)
+        console.log(`Coincide: "${normalizeText(p.name)}" === "${normalizedHioposPayment}"`);
+    });
+
     const matchedPayment = paymentData.payments.find(
-        (siigoPayment) => normalizeText(siigoPayment.name) === normalizedHioposPayment
+        (siigoPayment) =>
+            normalizeText(siigoPayment.name) === normalizedHioposPayment
     );
+
+    console.log('Matched Payment:', matchedPayment)
 
     return matchedPayment ? {
         id: matchedPayment.id,
@@ -666,7 +678,7 @@ export const matchCostCenter = async (hioposCostCenter) => {
 
         return {
             type: 'Product',
-            code: item.RefArticulo,
+            code: item.Ref_Articulo,
             description: item.Articulo,
             quantity: item.Unidades,
             price: type === 'sales' ? item.Base : item.Precio, // Condición según el tipo
@@ -702,7 +714,7 @@ export const matchCostCenter = async (hioposCostCenter) => {
 
         return {
             type: 'Product',
-            code: item.RefArticulo,
+            code: item.Ref_Articulo,
             description: item.Articulo,
             quantity: item.Unidades,
             price,
@@ -745,7 +757,7 @@ export const matchCostCenter = async (hioposCostCenter) => {
 
         return {
             type: 'Product',
-            code: item.RefArticulo,
+            code: item.Ref_Articulo,
             description: item.Articulo,
             quantity: item.Unidades,
             discount: item.Descuento,
@@ -759,16 +771,16 @@ export const matchCostCenter = async (hioposCostCenter) => {
 };*/
 export const setItemDataForInvoice = async (item, type) => {
     try {
-        const taxArray = item.DetalleImpuesto ?? item.Impuestos ?? [];
+        const taxArray = item.Detalle_Impuesto ?? item.Impuestos ?? [];
         const cargosAdaptados = (item.Cargos ?? []).map(cargo => ({
-            NombreImpuesto: cargo.NombreCargo,
-            PorcentajeImpuesto: cargo.PorcentajeCargo ?? 0,
+            NombreImpuesto: cargo.Nombre_Cargo,
+            PorcentajeImpuesto: cargo.Porcentaje_Cargo ?? 0,
         }));
 
         const impuestosCombinados = [...taxArray, ...cargosAdaptados];
 
         // 🆕 Incluir también las retefuente como impuestos
-        const retencionesArticulo = item.RetencionesArticulo ?? [];
+        const retencionesArticulo = item.Retenciones_Articulo ?? [];
         const retefuentes = retencionesArticulo
             .filter(ret => {
                 const nombre = ret.Retencion?.toLowerCase() ?? '';
@@ -776,7 +788,7 @@ export const setItemDataForInvoice = async (item, type) => {
             })
             .map(ret => ({
                 NombreImpuesto: ret.Retencion,
-                PorcentajeImpuesto: ret['%Retencion'] ?? 0,
+                PorcentajeImpuesto: ret['Porcentaje_Retencion'] ?? 0,
             }));
 
         const allTributaries = [...impuestosCombinados, ...retefuentes];
@@ -791,10 +803,10 @@ export const setItemDataForInvoice = async (item, type) => {
 
         return {
             type: 'Product',
-            code: item.RefArticulo,
+            code: item.Ref_Articulo,
             description: item.Articulo,
             quantity: item.Unidades,
-            discount: item.Descuento ?? item["%Descuento"] ?? 0,
+            discount: item.Descuento ?? item["Porcentaje_Descuento"] ?? 0,
             taxes,
             ...(type === 'sales' ? { taxed_price: price } : { price }),
         };
