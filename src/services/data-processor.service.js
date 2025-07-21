@@ -894,7 +894,8 @@ export const salesValidator = async (data = null) => {
                     }
 
                     const propina = Detalle_Totales.Entrada_Propina //Medio_Pago.find(p => p.Tipo && p.Tipo.toLowerCase() === 'propina');
-                    if (propina) {
+                    console.log('Propina:', propina)
+                    if (propina && typeof propina.Valor_Propina === 'number' && !isNaN(propina.Valor_Propina)) {
                         siigoItem.push({
                             code: 'PROP01',
                             type: 'Service',
