@@ -15,61 +15,58 @@ export const getHioposLote = async (type, filter, isManual = false, runSync = fa
             job_id: jobId
         });
 
-        console.log(`[${isManual ? 'MANUAL' : 'CRON'}] LOTE CREADO:`, lote.id);
+        //console.log(`[${isManual ? 'MANUAL' : 'CRON'}] LOTE CREADO:`, lote.id);
 
         // 2️⃣ Obtener datos desde Hiopos
         const getHioposData = await hioposService.getBridgeDataByType(type, filter);
         const hioposArray = getHioposData?.data || [];
 
-        console.log(`[${type.toUpperCase()}] Datos recibidos de Hiopos:`, hioposArray.length);
-        console.log(`[${type.toUpperCase()}] Primeros documentos:`, hioposArray.slice(0, 3).map(i => ({
-            doc: i.Serie_Numero || i['Serie/Numero'],
-            tipo: i.TipoDocumento
-        })));
+        //console.log(`[${type.toUpperCase()}] Datos recibidos de Hiopos:`, hioposArray.length);
+        //console.log(`[${type.toUpperCase()}] Primeros documentos:`, hioposArray.slice(0, 3).map(i => ({doc: i.Serie_Numero || i['Serie/Numero'],tipo: i.TipoDocumento})));
 
         // 3️⃣ Procesar transacciones (solo registro y deduplicación)
         const result = await processLoteTransactions(type, hioposArray, lote.dataValues);
-        console.log(`[${type.toUpperCase()}] Resultado del procesamiento de lote:`, result);
+        //console.log(`[${type.toUpperCase()}] Resultado del procesamiento de lote:`, result);
 
         // 4️⃣ Si es proceso manual con sincronización inmediata
         if (isManual && runSync) {
-            console.log('[SYNC MANUAL] Entrando a flujo de validación + sincronización...');
+            //console.log('[SYNC MANUAL] Entrando a flujo de validación + sincronización...');
 
             // 🔄 REFRESCAR transacciones luego del registro
             const updatedTransactions = await model.TransactionModel.findAll({ where: { lote_id: lote.id } });
-            console.log('[SYNC MANUAL] Transacciones actualizadas del lote:', updatedTransactions.map(tx => tx.document_number));
+            //console.log('[SYNC MANUAL] Transacciones actualizadas del lote:', updatedTransactions.map(tx => tx.document_number));
 
             // 🧪 Filtrar las que están listas para validar
             const validatable = updatedTransactions.filter(tx => tx.type === type && tx.status === 'validation');
-            console.log('[SYNC MANUAL] Transacciones para validar:', validatable.map(tx => tx.document_number));
+            //console.log('[SYNC MANUAL] Transacciones para validar:', validatable.map(tx => tx.document_number));
 
             if (type === 'purchases') {
-                console.log('[VALIDATOR] Iniciando validación de compras...');
+                //console.log('[VALIDATOR] Iniciando validación de compras...');
                 await purchaseValidator(validatable);
 
                 const toInvoice = await model.TransactionModel.findAll({
                     where: { lote_id: lote.id, type: 'purchases', status: 'to-invoice' }
                 });
-                console.log('[SYNC] Facturas de compra listas para sincronizar:', toInvoice.map(tx => tx.document_number));
+                //console.log('[SYNC] Facturas de compra listas para sincronizar:', toInvoice.map(tx => tx.document_number));
 
                 await purchaseInvoiceSync(toInvoice);
             } else if (type === 'sales') {
-                console.log('[VALIDATOR] Iniciando validación de ventas...');
+                //console.log('[VALIDATOR] Iniciando validación de ventas...');
                 await salesValidator(validatable);
 
                 const toInvoice = await model.TransactionModel.findAll({
                     where: { lote_id: lote.id, type: 'sales', status: 'to-invoice' }
                 });
-                console.log('[SYNC] Facturas de venta listas para sincronizar:', toInvoice.map(tx => tx.document_number));
+                //console.log('[SYNC] Facturas de venta listas para sincronizar:', toInvoice.map(tx => tx.document_number));
 
                 await saleInvoiceSync(toInvoice);
             }
 
-            console.log('[SYNC] Cerrando lote...');
+            //console.log('[SYNC] Cerrando lote...');
             await closeLote();
         }
 
-        console.log(`[FIN LOTE] Proceso completo para el lote ${lote.id}`);
+        //console.log(`[FIN LOTE] Proceso completo para el lote ${lote.id}`);
         return { result, loteId: lote.id };
     } catch (error) {
         console.error('Error procesando lote:', error);
@@ -109,7 +106,7 @@ export const processLoteTransactions = async (type, lote, loteHeader) => {
                 const rawTipo = invoice.Tipo_Documento;
                 const tipoNormalizado = normalizeText(rawTipo);
 
-                console.log(`[TX LOOP] Documento: ${invoice.Serie_Numero || invoice['Serie_Numero']} - Tipo: ${rawTipo} (normalizado: ${tipoNormalizado})`);
+                //console.log(`[TX LOOP] Documento: ${invoice.Serie_Numero || invoice['Serie_Numero']} - Tipo: ${rawTipo} (normalizado: ${tipoNormalizado})`);
 
                 // Detección por fragmentos clave (tolerante a errores de escritura)
                 const isCompra = tipoNormalizado.includes('factura') &&
@@ -123,7 +120,7 @@ export const processLoteTransactions = async (type, lote, loteHeader) => {
                     (type === 'purchases' && isCompra) ||
                     (type === 'sales' && isVenta)
                 ) {
-                    console.log(`[TX LOOP] ✅ Tipo válido. Intentando registrar transacción...`);
+                    //console.log(`[TX LOOP] ✅ Tipo válido. Intentando registrar transacción...`);
 
                     const coreData = type === 'purchases'
                         ? await siigoService.setSiigoPurchaseInvoiceData([invoice], params)
@@ -133,14 +130,14 @@ export const processLoteTransactions = async (type, lote, loteHeader) => {
 
                     if (transaction) {
                         processedCount++;
-                        console.log(`[TX LOOP] ✅ Transacción registrada: ${transaction.document_number}`);
+                        //console.log(`[TX LOOP] ✅ Transacción registrada: ${transaction.document_number}`);
                     } else {
                         omittedCount++;
-                        console.log(`[TX LOOP] ⚠️ Transacción omitida (posible duplicado).`);
+                        //console.log(`[TX LOOP] ⚠️ Transacción omitida (posible duplicado).`);
                     }
                 } else {
                     omittedCount++;
-                    console.log(`[TX LOOP] ❌ Tipo omitido. No coincide con '${type}'. Tipo normalizado: "${tipoNormalizado}"`);
+                    //console.log(`[TX LOOP] ❌ Tipo omitido. No coincide con '${type}'. Tipo normalizado: "${tipoNormalizado}"`);
                 }
             } catch (error) {
                 console.error('[PROCESS TRANSACTION ERROR]', invoice, error);
@@ -148,7 +145,7 @@ export const processLoteTransactions = async (type, lote, loteHeader) => {
             }
         }
 
-        console.log(`[PROCESS LOTE] ✔️ Procesadas: ${processedCount}, ❌ Omitidas: ${omittedCount}`);
+        //console.log(`[PROCESS LOTE] ✔️ Procesadas: ${processedCount}, ❌ Omitidas: ${omittedCount}`);
 
         await model.LoteModel.update(
             { transactions_count: processedCount, omitted_count: omittedCount },
@@ -382,11 +379,13 @@ export const purchaseValidator = async (data = null) => {
 
                     // 🧠 Validar centro de costos solo si es mandatorio o si Almacen está presente
                     const isCostCenterRequired = siigoDocument?.cost_center_mandatory ?? false;
+
                     const rawAlmacen = currentInvoice.hiopos_data.Almacen?.trim();
+                    //console.log('RawAlmacen:', rawAlmacen, isCostCenterRequired)
 
                     if (isCostCenterRequired || rawAlmacen) {
                         const coce = await siigoService.matchCostCenter(rawAlmacen);
-
+                        //console.log('Busqueda CECO:', coce)
                         if (!coce || !coce.id) {
                             if (isCostCenterRequired) {
                                 await model.TransactionModel.update({
@@ -514,7 +513,7 @@ export const purchaseValidator = async (data = null) => {
                     for (const payment of Detalle_Medios_de_pago) {
                         try {
                             const siigoMethod = await siigoService.getPaymentsByName('FC', payment);
-                            console.log('Siigo Method:', siigoMethod)
+                            //console.log('Siigo Method:', siigoMethod)
                             const calculatePayment = purchaseParam ? purchaseParam.calculate_payment : false;
 
                             if (!siigoMethod || !siigoMethod.id) {
@@ -579,7 +578,7 @@ export const purchaseValidator = async (data = null) => {
                         status: ret.status,
                     }));
 
-                    console.log('Datos preparados para la factura:', invoiceData);
+                    //console.log('Datos preparados para la factura:', invoiceData);
 
                     const endValidation = await model.TransactionModel.findByPk(currentInvoice.id);
                     const validationFields = [
@@ -590,7 +589,7 @@ export const purchaseValidator = async (data = null) => {
                         'payments_validator_status'
                     ];
 
-                    console.log('>>> Factura armada con tax_included:', invoiceData.tax_included);
+                    //console.log('>>> Factura armada con tax_included:', invoiceData.tax_included);
 
                     const allSuccess = validationFields.every(field => endValidation[field] === 'success');
                     endValidation.siigo_body = invoiceData;
@@ -616,14 +615,14 @@ export const purchaseValidator = async (data = null) => {
 
 const purchaseInvoiceSync = async (data  = null) => {
     try {
-        console.log('Data en sync purchase invoice:', data)
+        //console.log('Data en sync purchase invoice:', data)
         const invoices = (data && data.length > 0)
             ? data
             : await getInvoicesToCreation('purchases');
         const rateLimitDelay = 500; // Delay entre peticiones
 
         for (const invoice of invoices) {
-            console.log('Factura para enviar de compras:', invoice.siigo_body)
+            //console.log('Factura para enviar de compras:', invoice.siigo_body)
             try {
                 const creation = await siigoService.createPurchaseInvoice(invoice.siigo_body);
                 if (creation) {
@@ -894,7 +893,7 @@ export const salesValidator = async (data = null) => {
                     }
 
                     const propina = Detalle_Totales.Entrada_Propina //Medio_Pago.find(p => p.Tipo && p.Tipo.toLowerCase() === 'propina');
-                    console.log('Propina:', propina)
+                    //console.log('Propina:', propina)
                     if (propina && typeof propina.Valor_Propina === 'number' && !isNaN(propina.Valor_Propina)) {
                         siigoItem.push({
                             code: 'PROP01',
@@ -966,7 +965,7 @@ export const salesValidator = async (data = null) => {
                     invoiceData.payments = groupedPayments;
                     invoiceData.items = siigoItem;
 
-                    console.log('Datos preparados para la factura:', invoiceData);
+                    //console.log('Datos preparados para la factura:', invoiceData);
 
                     const endValidation = await model.TransactionModel.findByPk(currentInvoice.id);
                     const validationFields = [
@@ -1036,7 +1035,7 @@ const closeLote = async () => {
             raw: true
         });
 
-        console.log('OPEN LOTES', openLotes);
+        //console.log('OPEN LOTES', openLotes);
 
         // 2️⃣ Iterar sobre cada lote para revisar las transacciones asociadas
         for (const lote of openLotes) {
@@ -1063,7 +1062,7 @@ const closeLote = async () => {
                 { where: { id: lote.id } }
             );
 
-            console.log(`Lote ${lote.id} actualizado a: ${newStatus}`);
+            //console.log(`Lote ${lote.id} actualizado a: ${newStatus}`);
         }
     } catch (error) {
         console.error("Error en closeLote:", error);
@@ -1125,7 +1124,7 @@ export const deleteTransactions = async (ids) => {
 
 export const updateTransaction = async (id, data) => {
     try {
-        console.log('Servicio de update', id, data);
+        //console.log('Servicio de update', id, data);
 
         // Paso 1: Actualizar el siigo_body
         const [affectedCount] = await model.TransactionModel.update(
@@ -1133,7 +1132,7 @@ export const updateTransaction = async (id, data) => {
             { where: { id } }
         );
 
-        console.log('Líneas afectadas:', affectedCount);
+        //console.log('Líneas afectadas:', affectedCount);
 
         if (affectedCount === 0) {
             throw new Error(`No se encontró ninguna transacción con id ${id}`);
@@ -1207,15 +1206,15 @@ export const reprocessLote = async (loteId) => {
         const purchaseTransactions = transactions.filter(tx => tx.type === 'purchases');
         const salesTransactions = transactions.filter(tx => tx.type === 'sales');
 
-        console.log(`[REPROCESS LOTE ${loteId}] Compras: ${purchaseTransactions.length}, Ventas: ${salesTransactions.length}`);
-        console.log('compras en reproceso de lote', purchaseTransactions)
-        console.log('ventas en reproceso de lote', salesTransactions)
+        //console.log(`[REPROCESS LOTE ${loteId}] Compras: ${purchaseTransactions.length}, Ventas: ${salesTransactions.length}`);
+        //console.log('compras en reproceso de lote', purchaseTransactions)
+        //console.log('ventas en reproceso de lote', salesTransactions)
         await syncDataProcess({
             purchaseTransactions: purchaseTransactions.length > 0 ? purchaseTransactions : null,
             salesTransactions: salesTransactions.length > 0 ? salesTransactions : null
         });
 
-        console.log(`[REPROCESS LOTE ${loteId}] Finalizado correctamente.`);
+        //console.log(`[REPROCESS LOTE ${loteId}] Finalizado correctamente.`);
     } catch (error) {
         console.error(`[REPROCESS LOTE] Error reprocesando el lote ${loteId}:`, error);
         throw error;

@@ -88,6 +88,11 @@ const cleanInvalidJSONSafe = (jsonString) => {
             // 7. Corrige números americanos tipo 3,000.00 → 3000.00
             .replace(/:\s*(-?\d{1,3}(?:,\d{3})+(?:\.\d+)?)(?=\s*[,\]}])/g, (_, value) =>
                 `: ${value.replace(/,/g, '')}`
+            )
+
+            // 8. Limpia espacios en blanco alrededor de claves: `" Almacen "` → `"Almacen"`
+            .replace(/"(\s*[^"]*?\s*)"\s*:/g, (_, key) =>
+                `"${key.trim()}":`
             );
     } catch (error) {
         console.error('Error al limpiar JSON:', error.message);
@@ -141,13 +146,13 @@ const getHioposToken = async () => {
 
     // Si el token en caché es válido, devolverlo
     if (cachedHioposToken && hioposTokenExpiration && hioposTokenExpiration > now) {
-        console.log("Usando token de Hiopos desde caché");
+        //console.log("Usando token de Hiopos desde caché");
         return { authToken: cachedHioposToken, address: cachedHioposAddress };
     }
 
     // Si ya hay otra solicitud generando el token, esperar su resultado
     if (isFetchingHioposToken) {
-        console.log("Esperando a que se genere el token de Hiopos...");
+        //console.log("Esperando a que se genere el token de Hiopos...");
         return hioposTokenPromise;
     }
 
@@ -156,7 +161,7 @@ const getHioposToken = async () => {
 
     hioposTokenPromise = new Promise(async (resolve, reject) => {
         try {
-            console.log("Solicitando nuevo token de Hiopos...");
+            //console.log("Solicitando nuevo token de Hiopos...");
             const email = process.env.HIOPOS_EMAIL;
             const password = process.env.HIOPOS_PASSWORD;
 
@@ -189,7 +194,7 @@ const getHioposToken = async () => {
             cachedHioposAddress = address;
             hioposTokenExpiration = now + 60 * 60 * 1000; // Expira en 1 hora
 
-            console.log("Token de Hiopos guardado en caché");
+            //console.log("Token de Hiopos guardado en caché");
             resolve({ authToken, address });
         } catch (error) {
             console.error("Error en servicio (getHioposToken):", error);
@@ -277,10 +282,10 @@ export const getContactByDocument = async(type, contact) => {
             throw new Error(`Unknown type: ${type}`);
     }
     try {
-        console.log('getContactByDocument',type, {filters})
+        //console.log('getContactByDocument',type, {filters})
         const hioposContact = await getBridgeDataByType(type, {filters})
         return hioposContact.data
     } catch (error) {
-        console.log(error)
+        //console.log(error)
     }
 }

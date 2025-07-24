@@ -55,8 +55,8 @@ const getPaymentMethodsWithCache = async (type) => {
 };
 
 const getDocumentTypesWithCache = async (type) => {
-    console.log('TIPO en consulta del doc:', type)
-    console.log('documentCache', documentCache)
+    //console.log('TIPO en consulta del doc:', type)
+    //console.log('documentCache', documentCache)
     const now = Date.now();
     if (!documentCache[type] || now > (documentCacheExpiration[type] || 0)) {
         documentCache[type] = await getDocumentIdByType(type);
@@ -77,11 +77,11 @@ const getCostCentersWithCache = async () => {
 export const getInventoryGroupsWithCache = async () => {
     const now = Date.now();
     if (!inventoryGroupsCache || now > inventoryGroupsCacheExpiration) {
-        console.log('Cache de grupos de inventario expirada o no inicializada. Consultando a Siigo...');
+        //console.log('Cache de grupos de inventario expirada o no inicializada. Consultando a Siigo...');
         inventoryGroupsCache = await getInvetoryGroups();
         inventoryGroupsCacheExpiration = now + CACHE_TTL_MS;
     } else {
-        console.log('Usando cache de grupos de inventario');
+        //console.log('Usando cache de grupos de inventario');
     }
     return inventoryGroupsCache;
 };
@@ -92,13 +92,13 @@ export const getSiigoToken = async () => {
 
     // Si ya existe un token válido en caché, devolverlo
     if (cachedSiigoToken && now < tokenExpirationTime) {
-        console.log('Token de Siigo obtenido desde cache');
+        //console.log('Token de Siigo obtenido desde cache');
         return cachedSiigoToken;
     }
 
     // Si ya hay otra solicitud generando el token, esperar su promesa
     if (isFetchingToken) {
-        console.log('Esperando a que se genere el token...');
+        //console.log('Esperando a que se genere el token...');
         return tokenPromise;
     }
 
@@ -118,7 +118,7 @@ export const getSiigoToken = async () => {
             cachedSiigoToken = response.data.access_token;
             tokenExpirationTime = now + 60 * 60 * 1000;
 
-            console.log('Token de Siigo guardado en memoria');
+            //console.log('Token de Siigo guardado en memoria');
             resolve(cachedSiigoToken);
         } catch (error) {
             console.error('Error obteniendo el token de Siigo:', error.message);
@@ -180,7 +180,7 @@ const querySiigoContact = async (identification) => {
     try {
         const options = await getSiigoHeadersOptions();
         const url = `${SIIGO_BASE_URL}/v1/customers?identification=${identification}`;
-        //console.log('Consultando URL:', url);
+        ////console.log('Consultando URL:', url);
         const response = await axios.get(url, options);
         return response.data.results.length > 0 ? response.data : null;
     } catch (error) {
@@ -193,11 +193,11 @@ const querySiigoContact = async (identification) => {
 //"code": "MPP13"
 export const getItemByCode = async (code) => {
     try {
-        console.log('HET ITEM BY CODE', code)
+        //console.log('HET ITEM BY CODE', code)
         const options = await   getSiigoHeadersOptions()
         const url = `${SIIGO_BASE_URL}/v1/products?code=${code}`
         const response = await axios.get(url,options)
-        console.log('Get item by code', response.data )
+        //console.log('Get item by code', response.data )
         return response.data
     } catch (error) {
         console.error(error)
@@ -230,7 +230,7 @@ export const parseProviderInvoice = (input) => {
 };
 
 export const setSiigoPurchaseInvoiceData = async (data, params) => {
-    console.log('[FACTURAS DE COMPRA]', data);
+    //console.log('[FACTURAS DE COMPRA]', data);
 
     // Obtener el objeto con type = 'purchases' de params
     const purchaseParam = params.data.find(param => param.type === 'purchases');
@@ -369,7 +369,7 @@ export const setItemCreationData = async (item) => {
             ]
         };
     } catch (error) {
-        console.log('❌ Error armando la data del artículo:', error.message);
+        //console.log('❌ Error armando la data del artículo:', error.message);
         throw error;
     }
 };
@@ -410,7 +410,7 @@ const getTaxes = async () => {
         const response = await axios.get(`${SIIGO_BASE_URL}/v1/taxes`, options)
         return response.data
     } catch (error) {
-        console.log('Error en consulta de impuestos:', error)
+        //console.log('Error en consulta de impuestos:', error)
         handleServiceError(error)
     }
 }
@@ -440,13 +440,13 @@ export const createSiigoItem = async (item) => {
     try {
         const options = await getSiigoHeadersOptions();
         const data = await setItemCreationData(item);
-        console.log('Data armada para crear Articulo:', JSON.stringify(data) );
+        //console.log('Data armada para crear Articulo:', JSON.stringify(data) );
 
         const response = await axios.post(`${SIIGO_BASE_URL}/v1/products`, data, options);
         return response.data
     } catch (error) {
         // Si ocurre un error, devolver el estado 'error' y el mensaje de error
-        console.log('Error de creacion de item', error.response.data)
+        //console.log('Error de creacion de item', error.response.data)
         handleServiceError(error); // Maneja el error si es necesario
     }
 };
@@ -563,7 +563,7 @@ export const createContact = async (type, contact) => {
             return customer.data
         }
     } catch (error) {
-        console.log('Error creando el contacto en siigo', error.data)
+        //console.log('Error creando el contacto en siigo', error.data)
         handleServiceError(error)
     }
 }
@@ -589,19 +589,13 @@ export const getPaymentsByName = async (type, hioposPayment) => {
     const valueProperty = type === 'FC' ? 'Importe' : 'Valor';
     const normalizedHioposPayment = normalizeText(hioposPayment[paymentProperty]);
 
-    console.log('Data pagos en siigo', paymentData)
-    console.log('Nombre del metodo de pago', normalizedHioposPayment)
-    paymentData.payments.forEach(p => {
-        if (normalizeText(p.name) === normalizedHioposPayment)
-        console.log(`Coincide: "${normalizeText(p.name)}" === "${normalizedHioposPayment}"`);
-    });
 
     const matchedPayment = paymentData.payments.find(
         (siigoPayment) =>
             normalizeText(siigoPayment.name) === normalizedHioposPayment
     );
 
-    console.log('Matched Payment:', matchedPayment)
+    //console.log('Matched Payment:', matchedPayment)
 
     return matchedPayment ? {
         id: matchedPayment.id,
@@ -793,7 +787,7 @@ export const setItemDataForInvoice = async (item, type) => {
 
         const allTributaries = [...impuestosCombinados, ...retefuentes];
 
-        console.log('All tributes:', allTributaries)
+        //console.log('All tributes:', allTributaries)
 
         const taxes = allTributaries.length > 0
             ? await getTaxesByName(allTributaries)
