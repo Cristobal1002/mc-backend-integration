@@ -113,8 +113,7 @@ export const processLoteTransactions = async (type, lote, loteHeader) => {
                     tipoNormalizado.includes('compra');
 
                 const isVenta = tipoNormalizado.includes('factura') &&
-                    tipoNormalizado.includes('venta') &&
-                    tipoNormalizado.includes('electr');
+                    tipoNormalizado.includes('venta')
 
                 if (
                     (type === 'purchases' && isCompra) ||
