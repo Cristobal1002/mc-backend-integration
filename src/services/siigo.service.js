@@ -374,14 +374,7 @@ export const setItemCreationData = async (item) => {
     }
 };
 
-export const setItemInvoiceData = async (item) => {
-    try {
-        const taxes = await getTaxesByName(item.DetalleImpuesto);
 
-    } catch (error) {
-
-    }
-}
 export const getTaxesByName = async (hioposTaxes) => {
     const taxList = await getTaxesWithCache();
 
@@ -399,6 +392,7 @@ export const getTaxesByName = async (hioposTaxes) => {
         return {
             name: taxName,
             percentage: parseFloat(taxPercentage),
+            value: hioposTax.Valor_Cargo ?? null,
             id: matchedTax ? matchedTax.id : null,
             status: matchedTax ? 'found' : 'not_found',
         };
@@ -465,8 +459,8 @@ const getInvetoryGroups = async () => {
 export const setCustomerContactData = (contact) => {
 
     const customer = contact[0]
-    const isCompany = customer.TipoDocumento === "NIT";
-    const person_type = customer.TipoDocumento === 'NIT' ? 'Company' : 'Person';
+    const isCompany = customer.Tipo_Documento_Fiscal === "NIT";
+    const person_type = customer.Tipo_Documento_Fiscal === 'NIT' ? 'Company' : 'Person';
     const cleanedNif = customer.Nif.replace(/[.,-]/g, '');
     const identification = person_type === 'Company'? cleanedNif.slice(0, 9) : cleanedNif;
 
@@ -767,8 +761,9 @@ export const setItemDataForInvoice = async (item, type) => {
     try {
         const taxArray = item.Detalle_Impuesto ?? item.Impuestos ?? [];
         const cargosAdaptados = (item.Cargos ?? []).map(cargo => ({
-            NombreImpuesto: cargo.Nombre_Cargo,
-            PorcentajeImpuesto: cargo.Porcentaje_Cargo ?? 0,
+            Nombre_Impuesto: cargo.Nombre_Cargo,
+            Valor_Cargo: cargo.Valor_Cargo ?? 0,
+            Porcentaje_Impuesto: 0, // Para que pase el filtro
         }));
 
         const impuestosCombinados = [...taxArray, ...cargosAdaptados];
