@@ -456,66 +456,118 @@ const getInvetoryGroups = async () => {
     }
 }
 
-export const setCustomerContactData = (contact) => {
+/**
+ * Limpia todo lo que no sea dígito.
+ * @param {string} value
+ * @returns {string} Solo dígitos
+ */
+const cleanDigits = (value) => (value ?? '').toString().replace(/\D/g, '');
 
-    const customer = contact[0]
-    const isCompany = customer.Tipo_Documento_Fiscal === "NIT";
-    const person_type = customer.Tipo_Documento_Fiscal === 'NIT' ? 'Company' : 'Person';
-    const cleanedNif = customer.Nif.replace(/[.,-]/g, '');
-    const identification = person_type === 'Company'? cleanedNif.slice(0, 9) : cleanedNif;
+/**
+ * Construye el payload de contacto de cliente para Siigo.
+ * - Company (NIT): identification = primeros 9 dígitos del NIT (sin DV)
+ * - Person: identification = todos los dígitos del documento
+ * @param {Array<Object>} contact
+ * @returns {Object} payload para Siigo
+ */
+export const setCustomerContactData = (contact) => {
+    if (!Array.isArray(contact) || contact.length === 0) {
+        throw new Error('setCustomerContactData: el parámetro "contact" debe ser un arreglo no vacío.');
+    }
+
+    const customer = contact[0] ?? {};
+    const tipoFiscal = (customer.Tipo_Documento_Fiscal ?? '').toString().trim().toUpperCase();
+    const isCompany = tipoFiscal === 'NIT';
+    const person_type = isCompany ? 'Company' : 'Person';
+
+    // Limpia y normaliza el documento
+    const rawNif = customer.Nif ?? '';
+    const onlyDigits = cleanDigits(rawNif);
+
+    // Si es empresa (NIT): solo los primeros 9 dígitos (sin DV)
+    const identification = isCompany ? onlyDigits.substring(0, 9) : onlyDigits;
+
+    // Opcional: validar que si es empresa, existan al menos 9 dígitos (puedes cambiar a "throw" si quieres ser estricto)
+    if (isCompany && identification.length < 9) {
+        console.warn('setCustomerContactData: NIT con menos de 9 dígitos base. Se enviará lo disponible.');
+    }
 
     return {
         type: 'Customer',
-        person_type,
-        id_type: isCompany ? "31" : "13",
-        identification,
-        name: formatSiigoName(isCompany ? "Company" : "Person", customer.Cliente),
-        commercial_name:  customer.Cliente,
-        phone: customer.Telefono,
-        email: customer.Email,
-        /*address: {
-            address: supplier.Direccion,
-            city: {
-                code: supplier.Codigo_Postal.toString(),
-                name: supplier.Poblacion_Ciudad || "Unknown"
-            }
-        },*/
-        comments: customer.Observaciones || "",
+        person_type,                     // 'Company' | 'Person'
+        id_type: isCompany ? '31' : '13',// 31=NIT, 13=CC (común en Siigo)
+        identification,                  // NIT base (9 dígitos) o documento completo
+        name: formatSiigoName(person_type, customer.Cliente ?? ''), // Mantén tu helper
+        commercial_name: (customer.Cliente ?? '').toString().trim(),
+        phone: (customer.Telefono ?? '').toString().trim(),
+        email: (customer.Email ?? '').toString().trim(),
+        comments: "Cliente creado automáticamente por la interfaz",
+
+        // Si luego deseas activar dirección, descomenta y ajusta:
+        // address: {
+        //   address: (customer.Direccion ?? '').toString().trim(),
+        //   city: {
+        //     code: (customer.Codigo_Postal ?? '').toString(),
+        //     name: (customer.Poblacion_Ciudad ?? 'Unknown').toString().trim(),
+        //   },
+        // },
     };
+};
 
 
-}
-
+/**
+ * Construye el payload de contacto de proveedor para Siigo.
+ * - Company (NIT): identification = primeros 9 dígitos del NIT (sin DV)
+ * - Person: identification = todos los dígitos del documento
+ * @param {Array<Object>} contact
+ * @returns {Object} payload para Siigo
+ */
 export const setVendorContactData = (contact) => {
-    const supplier = contact[0]
-    const isCompany = supplier.Tipo_Documento_Fiscal === "NIT";
-    const person_type = supplier.Tipo_Documento_Fiscal === 'NIT' ? 'Company' : 'Person';
-    const cleanedNif = supplier.Numero_De_Documento_Fiscal.replace(/[.,-]/g, '');
-    const identification = person_type === 'Company'? cleanedNif.slice(0, 9) : cleanedNif;
-    const vat_responsible = supplier.Regimenes_fiscales === "Responsables de IVA"
+    if (!Array.isArray(contact) || contact.length === 0) {
+        throw new Error('setVendorContactData: el parámetro "contact" debe ser un arreglo no vacío.');
+    }
 
+    const supplier = contact[0] ?? {};
+    const tipoFiscal = (supplier.Tipo_Documento_Fiscal ?? '').toString().trim().toUpperCase();
+    const isCompany = tipoFiscal === 'NIT';
+    const person_type = isCompany ? 'Company' : 'Person';
+
+    // Documento fiscal del proveedor
+    const rawDoc = supplier.Numero_De_Documento_Fiscal ?? supplier.Nif ?? '';
+    const digits = cleanDigits(rawDoc);
+    const identification = isCompany ? digits.substring(0, 9) : digits;
+
+    if (isCompany && identification.length < 9) {
+        console.warn('setVendorContactData: NIT con menos de 9 dígitos base. Se enviará lo disponible.');
+    }
+
+    // Normaliza régimen fiscal para determinar si es responsable de IVA
+    const regimen = (supplier.Regimenes_fiscales ?? '').toString().trim();
+    const vat_responsible = /\bresponsables?\s+de\s+iva\b/i.test(regimen);
 
     return {
         type: 'Supplier',
-        person_type,
-        id_type: isCompany ? "31" : "13",
-        identification,
-        name: formatSiigoName(isCompany ? "Company" : "Person", supplier.Proveedor),
-        commercial_name: supplier.Nombre_Comercial || supplier.Proveedor,
-        vat_responsible,
-        phone: supplier.Telefono,
-        email: supplier.Email,
-        /*address: {
-            address: supplier.Direccion,
-            city: {
-                code: supplier.Codigo_Postal.toString(),
-                name: supplier.Poblacion_Ciudad || "Unknown"
-            }
-        },*/
-        comments: supplier.Observaciones || "",
-    };
-}
+        person_type,                         // 'Company' | 'Person'
+        id_type: isCompany ? '31' : '13',    // 31=NIT, 13=CC (común en Siigo)
+        identification,                      // NIT base (9 dígitos) o documento completo
+        name: formatSiigoName(person_type, (supplier.Proveedor ?? '').toString().trim()),
+        commercial_name: (supplier.Nombre_Comercial ?? supplier.Proveedor ?? '').toString().trim(),
+        vat_responsible,                     // true si "Responsables de IVA"
+        phone: (supplier.Telefono ?? '').toString().trim(),
+        email: (supplier.Email ?? '').toString().trim(),
 
+        // Si luego deseas activar dirección, descomenta y ajusta:
+        // address: {
+        //   address: (supplier.Direccion ?? '').toString().trim(),
+        //   city: {
+        //     code: (supplier.Codigo_Postal ?? '').toString(),
+        //     name: (supplier.Poblacion_Ciudad ?? 'Unknown').toString().trim(),
+        //   },
+        // },
+
+        comments: 'Proveedor creado automáticamente por la interfaz',
+    };
+};
 const formatSiigoName = (type, fullName) => {
     if (type === "Company") {
         // Empresas: solo enviamos el nombre completo como un solo elemento en el array
