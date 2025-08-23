@@ -1,10 +1,10 @@
 import axios from "axios";
-import {CustomError, handleServiceError} from "../errors/index.js";
-import {DateTime} from "luxon";
-import {model} from "../models/index.js";
+import { CustomError, handleServiceError } from "../errors/index.js";
+import { DateTime } from "luxon";
+import { model } from "../models/index.js";
 
 const SIIGO_BASE_URL = process.env.SIIGO_BASE_URL
-const SIIGO_SERVICES_BASE_URL= 'https://services.siigo.com'
+const SIIGO_SERVICES_BASE_URL = 'https://services.siigo.com'
 const SIIGO_USER = process.env.SIIGO_USER
 const SIIGO_TOKEN = process.env.SIIGO_TOKEN
 const PARTNER = process.env.SIIGO_PARTNER
@@ -194,9 +194,9 @@ const querySiigoContact = async (identification) => {
 export const getItemByCode = async (code) => {
     try {
         //console.log('HET ITEM BY CODE', code)
-        const options = await   getSiigoHeadersOptions()
+        const options = await getSiigoHeadersOptions()
         const url = `${SIIGO_BASE_URL}/v1/products?code=${code}`
-        const response = await axios.get(url,options)
+        const response = await axios.get(url, options)
         //console.log('Get item by code', response.data )
         return response.data
     } catch (error) {
@@ -247,7 +247,7 @@ export const setSiigoPurchaseInvoiceData = async (data, params) => {
 
         // Calcular amount dependiendo de la parametrización, redondeado a 2 decimales
         let amount
-        if(calculatePayment && taxesInCalculation){
+        if (calculatePayment && taxesInCalculation) {
             amount = invoice.Detalle_Documento.reduce((sum, item) => sum + (item.Precio * item.Unidades), 0).toFixed(2);
         } else {
             amount = invoice.Detalle_Documento.reduce((sum, item) => {
@@ -315,7 +315,7 @@ export const setSiigoSalesInvoiceData = async (data, params) => {
             code: item.Ref_Articulo,
             quantity: item.Unidades,
             price: item.Precio,
-            discount: item. Descuento
+            discount: item.Descuento
         })),
         payments: invoice.Medio_Pago.map(payment => ({
             id: payment.Medio_De_Pago,
@@ -385,7 +385,7 @@ export const getTaxesByName = async (hioposTaxes) => {
         let taxName = rawName?.trim();
         const taxPercentage = hioposTax.Porcentaje_Impuesto ?? hioposTax.Porcentaje_Retencion;
         if (!taxName) return null;
-        if(taxName === 'EXENTOS') taxName = 'IVA 0%';
+        if (taxName === 'EXENTOS') taxName = 'IVA 0%';
         const normalizedTaxName = taxName.toLowerCase();
         const matchedTax = taxList.find(siigoTax => siigoTax.name.toLowerCase() === normalizedTaxName);
 
@@ -421,6 +421,7 @@ export const createPurchaseInvoice = async (data) => {
 }
 
 export const createSaleInvoice = async (data) => {
+    console.log("jorge data", JSON.stringify(data))
     try {
         const options = await getSiigoHeadersOptions()
         const url = `${SIIGO_BASE_URL}/v1/invoices`
@@ -449,7 +450,7 @@ const getInvetoryGroups = async () => {
     try {
         const options = await getSiigoHeadersOptions()
         const url = `${SIIGO_BASE_URL}/v1/account-groups`
-        const response = await axios.get(url,options)
+        const response = await axios.get(url, options)
         return response.data
     } catch (error) {
         handleServiceError(error)
@@ -599,11 +600,11 @@ export const createContact = async (type, contact) => {
     const options = await getSiigoHeadersOptions()
     const url = `${SIIGO_BASE_URL}/v1/customers`
     try {
-        if (type === '/vendors'){
+        if (type === '/vendors') {
             const data = setVendorContactData(contact)
             const supplier = await axios.post(url, data, options)
             return supplier.data
-        }else if (type === '/customers') {
+        } else if (type === '/customers') {
             const data = setCustomerContactData(contact);
             const customer = await axios.post(url, data, options);
             return customer.data
@@ -619,7 +620,7 @@ const getSiigoPaymentMethods = async (documentType) => {
     const url = `${SIIGO_BASE_URL}/v1/payment-types?document_type=${documentType}`
     try {
         const response = await axios.get(url, options)
-        return {type:documentType, payments:response.data}
+        return { type: documentType, payments: response.data }
     } catch (error) {
         handleServiceError(error)
     }
@@ -657,7 +658,7 @@ const getDocumentIdByType = async (documentType) => {
         const options = await getSiigoHeadersOptions()
         const url = `${SIIGO_BASE_URL}/v1/document-types?type=${documentType}`
         const response = await axios.get(url, options)
-        return {type:documentType, documents:response.data}
+        return { type: documentType, documents: response.data }
     } catch (error) {
         handleServiceError(error)
     }
@@ -689,7 +690,7 @@ const getCostCenters = async () => {
         const url = `${SIIGO_BASE_URL}/v1/cost-centers`
         const response = await axios.get(url, options)
         return response.data
-    }catch (error) {
+    } catch (error) {
         handleServiceError(error)
     }
 }
@@ -857,4 +858,128 @@ export const setItemDataForInvoice = async (item, type) => {
         handleServiceError(error);
         return null;
     }
+
+
+
+
+
+    try {
+        // Helpers
+        const isNonEmptyObj = (o) => o && typeof o === 'object' && Object.keys(o).length > 0;
+
+        const coalesce = (...vals) => vals.find(v => v !== undefined && v !== null);
+
+        const toArray = (v) => Array.isArray(v) ? v : (v ? [v] : []);
+
+        const num = (v, d = 0) => {
+            const n = typeof v === 'string' ? Number(v.replace(',', '.')) : Number(v);
+            return Number.isFinite(n) ? n : d;
+        };
+
+        const normalizeTaxes = (arr) => {
+            return toArray(arr)
+                .filter(isNonEmptyObj)
+                .map(t => ({
+                    Nombre_Impuesto: coalesce(
+                        t.Nombre_Impuesto, t.nombre_impuesto, t.impuesto, t.NombreImpuesto, t.Nombre
+                    ),
+                    Porcentaje_Impuesto: num(coalesce(
+                        t.Porcentaje_Impuesto, t.porcentaje_impuesto, t.Porcentaje, t.PorcentajeRetencion
+                    ), undefined),
+                    Valor_Impuesto: num(coalesce(
+                        t.Valor_Impuesto, t.valor_impuesto, t.Valor
+                    ), undefined)
+                }))
+                .filter(t => t.Nombre_Impuesto); // descarta sin nombre
+        };
+
+        const computePercentIfMissing = (taxes, base) => {
+            if (!base) return taxes;
+            return taxes.map(t => {
+                if ((t.Porcentaje_Impuesto === undefined || t.Porcentaje_Impuesto === null)
+                    && Number.isFinite(t.Valor_Impuesto)) {
+                    const pct = base ? (t.Valor_Impuesto / base) * 100 : 0;
+                    return { ...t, Porcentaje_Impuesto: +pct.toFixed(6) };
+                }
+                return t;
+            });
+        };
+
+        // 1) Impuestos del propio item (aceptando variantes)
+        const taxArrayRaw = coalesce(
+            item.Detalle_Impuesto,
+            item.DetalleImpuesto,
+            item.Impuestos,
+            item.Impuesto,
+            []
+        );
+
+        // 2) Cargos → los tratamos como impuestos solo si vienen con nombre
+        const cargosAdaptados = toArray(item.Cargos)
+            .filter(isNonEmptyObj)
+            .map(c => ({
+                Nombre_Impuesto: coalesce(c.Nombre_Cargo, c.nombre_cargo, c.Cargo, c.Nombre),
+                Valor_Impuesto: num(coalesce(c.Valor_Cargo, c.valor_cargo), 0),
+                Porcentaje_Impuesto: num(coalesce(c.Porcentaje_Impuesto, c.porcentaje_impuesto), 0),
+            }))
+            .filter(c => c.Nombre_Impuesto); // fuera los vacíos
+
+        // 3) Retenciones (solo retefuente)
+        const retsRaw = coalesce(item.Retenciones_Articulo, item.RetencionesArticulo, []);
+        const retefuentes = toArray(retsRaw)
+            .filter(isNonEmptyObj)
+            .filter(ret => (ret.Retencion ?? ret.Nombre ?? '').toLowerCase().includes('fuente'))
+            .map(ret => ({
+                Nombre_Impuesto: coalesce(ret.Retencion, ret.Nombre),
+                Porcentaje_Impuesto: num(coalesce(ret.Porcentaje_Retencion, ret.Porcentaje, ret.porcentaje), 0),
+            }))
+            .filter(r => r.Nombre_Impuesto);
+
+        // 4) (Opcional) Impuestos de modificadores
+        const modsRaw = toArray(item.Modificadores_Articulo);
+        const modsTaxes = modsRaw.flatMap(mod => {
+            const modTaxes = coalesce(mod.Detalle_Impuesto, mod.DetalleImpuesto, mod.Impuestos, []);
+            return normalizeTaxes(modTaxes);
+        });
+
+        // 5) Normalización + cálculo de porcentaje si falta
+        const base = num(coalesce(item.Base, item.Base_unitaria, item.base, item.base_unitaria), undefined);
+        const taxesItem = computePercentIfMissing(normalizeTaxes(taxArrayRaw), base);
+        const taxesCargos = computePercentIfMissing(normalizeTaxes(cargosAdaptados), base);
+        const taxesRets = computePercentIfMissing(normalizeTaxes(retefuentes), base);
+        const taxesMods = computePercentIfMissing(normalizeTaxes(modsTaxes), base);
+
+        // 6) Unificar y deduplicar (por nombre + porcentaje)
+        const allTributaries = [...taxesItem, ...taxesCargos, ...taxesRets, ...taxesMods]
+            .filter(t => t.Nombre_Impuesto && Number.isFinite(t.Porcentaje_Impuesto));
+
+        const dedupKey = (t) => `${t.Nombre_Impuesto}::${Number(t.Porcentaje_Impuesto).toFixed(6)}`;
+        const uniqueTributaries = Object.values(
+            allTributaries.reduce((acc, t) => {
+                acc[dedupKey(t)] = acc[dedupKey(t)] ?? t;
+                return acc;
+            }, {})
+        );
+
+        const taxes = uniqueTributaries.length > 0
+            ? await getTaxesByName(uniqueTributaries)
+            : [];
+
+        const price = num(item.Precio);
+        if (type === 'sales' && price === 0) return null;
+
+        return {
+            type: 'Product',
+            code: item.Ref_Articulo ?? item.Referencia ?? item.Cod_Barra ?? item.Cod_Articulo,
+            description: item.Articulo,
+            quantity: num(item.Unidades, 1),
+            discount: num(coalesce(item.Descuento, item['Porcentaje_Descuento']), 0),
+            taxes,
+            ...(type === 'sales' ? { taxed_price: price } : { price }),
+        };
+    } catch (error) {
+        handleServiceError(error);
+        return null;
+    }
+
 };
