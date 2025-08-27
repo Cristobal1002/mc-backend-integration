@@ -251,17 +251,12 @@ export const registerTransaction = async (type, hioposData, coreData, loteId) =>
 
 export const syncDataProcess = async ({ purchaseTransactions = null, salesTransactions = null } = {}) => {
     try {
-        /*if (purchaseTransactions !== null) {
-            await purchaseValidator(purchaseTransactions);
-            await purchaseInvoiceSync(purchaseTransactions);
-        }
+        // Validar y sincronizar compras si hay transacciones válidas
+        const hasPurchases = Array.isArray(purchaseTransactions) && purchaseTransactions.length > 0;
+        console.log('Validación compra:', hasPurchases);
 
-        if (salesTransactions !== null) {
-            await salesValidator(salesTransactions);
-            await saleInvoiceSync(salesTransactions);
-        }*/
-        if (purchaseTransactions !== null || (Array.isArray(purchaseTransactions) && purchaseTransactions.length > 0) ) {
-
+        if (hasPurchases) {
+            console.log('Entra a la compra');
             await purchaseValidator(purchaseTransactions);
 
             const refreshedPurchases = await model.TransactionModel.findAll({
@@ -274,27 +269,31 @@ export const syncDataProcess = async ({ purchaseTransactions = null, salesTransa
             await purchaseInvoiceSync(refreshedPurchases);
         }
 
-        if (salesTransactions !== null || (Array.isArray(salesTransactions) && salesTransactions.length > 0)) {
+        // Validar y sincronizar ventas si hay transacciones válidas
+        const hasSales = Array.isArray(salesTransactions) && salesTransactions.length > 0;
+        console.log('Validación venta:', hasSales);
+
+        if (hasSales) {
             await salesValidator(salesTransactions);
 
             const refreshedSales = await model.TransactionModel.findAll({
                 where: {
                     id: salesTransactions.map(tx => tx.id),
-                    status: 'to-invoice' // solo las que realmente quedaron listas
+                    status: 'to-invoice'
                 }
             });
 
             await saleInvoiceSync(refreshedSales);
         }
 
-        await closeLote(); // Se puede dejar o condicionar también
+        // Cerrar lote si todo salió bien
+        await closeLote();
 
     } catch (error) {
         console.error('Error al sincronizar con Siigo:', error);
         throw error;
     }
 };
-
 export const getValidationRegisterData = async (type) => {
     try {
       return await model.TransactionModel.findAll({where: {
@@ -859,6 +858,7 @@ export const salesValidator = async (data = null) => {
 
                     let siigoItem = [];
 
+                    //Esto es para Jorge, aqui se agrgan los impuestos de los articulos
                     for (const item of Detalle_Documento) {
                         const formattedItem = await siigoService.setItemDataForInvoice(item, 'sales');
                         if (formattedItem) siigoItem.push(formattedItem);
