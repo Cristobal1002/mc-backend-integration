@@ -421,7 +421,6 @@ export const createPurchaseInvoice = async (data) => {
 }
 
 export const createSaleInvoice = async (data) => {
-    console.log("jorge data", JSON.stringify(data))
     try {
         const options = await getSiigoHeadersOptions()
         const url = `${SIIGO_BASE_URL}/v1/invoices`
@@ -750,7 +749,7 @@ export const matchCostCenter = async (hioposCostCenter) => {
     }
 };*/
 
-export const setItemDataForInvoice = async (item, type) => {
+/*export const setItemDataForInvoice = async (item, type) => {
     try {
         const taxArray = item.DetalleImpuesto ?? item.Impuestos ?? [];
 
@@ -790,4 +789,148 @@ export const setItemDataForInvoice = async (item, type) => {
         handleServiceError(error);
         return null;
     }
+};*/
+
+
+export const setItemDataForInvoice = async (item, type) => {
+  try {
+    // ===== Helpers =====
+    const isNonEmptyObj = (o) => o && typeof o === 'object' && Object.keys(o).length > 0;
+
+    const coalesce = (...vals) => vals.find(v => v !== undefined && v !== null);
+
+    const toArray = (v) => Array.isArray(v) ? v : (v ? [v] : []);
+
+    const num = (v, d = 0) => {
+      const n = typeof v === 'string' ? Number(v.replace(',', '.')) : Number(v);
+      return Number.isFinite(n) ? n : d;
+    };
+
+    const normalizeTaxes = (arr) => {
+      return toArray(arr)
+        .filter(isNonEmptyObj)
+        .map(t => ({
+          Nombre_Impuesto: coalesce(
+            t.Nombre_Impuesto, t.nombre_impuesto, t.impuesto, t.NombreImpuesto, t.Nombre, t.name
+          ),
+          Porcentaje_Impuesto: num(coalesce(
+            t.Porcentaje_Impuesto, t.porcentaje_impuesto, t.Porcentaje, t.PorcentajeRetencion, t.rate
+          ), undefined),
+          Valor_Impuesto: num(coalesce(
+            t.Valor_Impuesto, t.valor_impuesto, t.Valor, t.amount
+          ), undefined)
+        }))
+        .filter(t => t.Nombre_Impuesto); // descarta sin nombre
+    };
+
+    const computePercentIfMissing = (taxes, base) => {
+      if (!Number.isFinite(base) || base === 0) return taxes;
+      return taxes.map(t => {
+        if ((t.Porcentaje_Impuesto === undefined || t.Porcentaje_Impuesto === null)
+            && Number.isFinite(t.Valor_Impuesto)) {
+          const pct = (t.Valor_Impuesto / base) * 100;
+          return { ...t, Porcentaje_Impuesto: +pct.toFixed(6) };
+        }
+        return t;
+      });
+    };
+
+    const dedupByNamePct = (taxes) => {
+      const key = (t) => `${t.Nombre_Impuesto}::${Number(t.Porcentaje_Impuesto).toFixed(6)}`;
+      const map = {};
+      for (const t of taxes) {
+        if (!t || t.Porcentaje_Impuesto == null || !Number.isFinite(t.Porcentaje_Impuesto)) continue;
+        map[key(t)] = map[key(t)] ?? t;
+      }
+      return Object.values(map);
+    };
+
+    // ===== 1) Impuestos del ÍTEM (aceptando variantes de llave) =====
+    const taxArrayRaw = coalesce(
+      item.Detalle_Impuesto,
+      item.DetalleImpuesto,
+      item.Impuestos,
+      item.Impuesto,
+      []
+    );
+
+    // ===== 2) CARGOS como impuestos (solo si vienen con nombre) =====
+    const cargosAdaptados = toArray(item.Cargos)
+      .filter(isNonEmptyObj)
+      .map(c => ({
+        Nombre_Impuesto: coalesce(c.Nombre_Cargo, c.nombre_cargo, c.Cargo, c.Nombre),
+        Valor_Impuesto: num(coalesce(c.Valor_Cargo, c.valor_cargo), 0),
+        Porcentaje_Impuesto: num(coalesce(c.Porcentaje_Impuesto, c.porcentaje_impuesto), 0),
+      }))
+      .filter(c => c.Nombre_Impuesto);
+
+    // ===== 3) RETENCIONES (solo retefuente) =====
+    const retsRaw = coalesce(item.Retenciones_Articulo, item.RetencionesArticulo, []);
+    const retefuentes = toArray(retsRaw)
+      .filter(isNonEmptyObj)
+      .filter(ret => (ret.Retencion ?? ret.Nombre ?? '').toLowerCase().includes('fuente'))
+      .map(ret => ({
+        Nombre_Impuesto: coalesce(ret.Retencion, ret.Nombre),
+        Porcentaje_Impuesto: num(coalesce(ret.Porcentaje_Retencion, ret.Porcentaje, ret.porcentaje), 0),
+      }))
+      .filter(r => r.Nombre_Impuesto);
+
+    // ===== 4) Impuestos de MODIFICADORES =====
+    const modsRaw = toArray(item.Modificadores_Articulo);
+    const taxesFromMods = [];
+    for (const mod of modsRaw) {
+      if (!isNonEmptyObj(mod)) continue;
+
+      const modTaxesRaw = coalesce(
+        mod.Detalle_Impuesto,
+        mod.DetalleImpuesto,
+        mod.Impuestos,
+        []
+      );
+
+      // Base del modificador para calcular % si falta
+      const modBase = num(coalesce(mod.Base, mod.Base_unitaria, mod.base, mod.base_unitaria), undefined);
+
+      let modTaxes = normalizeTaxes(modTaxesRaw);
+      modTaxes = computePercentIfMissing(modTaxes, modBase);
+
+      taxesFromMods.push(...modTaxes);
+    }
+
+    // ===== 5) Normaliza ítem/cargos/retefuente y calcula % si falta usando base del ÍTEM =====
+    const baseItem = num(coalesce(item.Base, item.Base_unitaria, item.base, item.base_unitaria), undefined);
+
+    const taxesItem  = computePercentIfMissing(normalizeTaxes(taxArrayRaw), baseItem);
+    const taxesCargos = computePercentIfMissing(normalizeTaxes(cargosAdaptados), baseItem);
+    const taxesRets   = computePercentIfMissing(normalizeTaxes(retefuentes), baseItem);
+
+    // ===== 6) Unifica, deduplica y arma payload para Siigo =====
+    const allTributaries = dedupByNamePct([
+      ...taxesItem,
+      ...taxesCargos,
+      ...taxesRets,
+      ...taxesFromMods
+    ]);
+
+    const taxes = allTributaries.length > 0
+      ? await getTaxesByName(allTributaries) // ← tu resolutor por nombre + % a IDs de Siigo
+      : [];
+
+    // ===== 7) Precio / salida =====
+    const price = num(item.Precio);
+    if (type === 'sales' && price === 0) return null;
+
+    return {
+      type: 'Product',
+      code: item.Ref_Articulo ?? item.Referencia ?? item.Cod_Barra ?? item.Cod_Articulo,
+      description: item.Articulo,
+      quantity: num(item.Unidades, 1),
+      discount: num(coalesce(item.Descuento, item['Porcentaje_Descuento']), 0),
+      taxes,
+      ...(type === 'sales' ? { taxed_price: price } : { price }),
+    };
+  } catch (error) {
+    handleServiceError(error);
+    return null;
+  }
 };
