@@ -1,10 +1,10 @@
 import axios from "axios";
-import {CustomError, handleServiceError} from "../errors/index.js";
-import {DateTime} from "luxon";
-import {model} from "../models/index.js";
+import { CustomError, handleServiceError } from "../errors/index.js";
+import { DateTime } from "luxon";
+import { model } from "../models/index.js";
 
 const SIIGO_BASE_URL = process.env.SIIGO_BASE_URL
-const SIIGO_SERVICES_BASE_URL= 'https://services.siigo.com'
+const SIIGO_SERVICES_BASE_URL = 'https://services.siigo.com'
 const SIIGO_USER = process.env.SIIGO_USER
 const SIIGO_TOKEN = process.env.SIIGO_TOKEN
 const PARTNER = process.env.SIIGO_PARTNER
@@ -194,9 +194,9 @@ const querySiigoContact = async (identification) => {
 export const getItemByCode = async (code) => {
     try {
         //console.log('HET ITEM BY CODE', code)
-        const options = await   getSiigoHeadersOptions()
+        const options = await getSiigoHeadersOptions()
         const url = `${SIIGO_BASE_URL}/v1/products?code=${code}`
-        const response = await axios.get(url,options)
+        const response = await axios.get(url, options)
         //console.log('Get item by code', response.data )
         return response.data
     } catch (error) {
@@ -247,7 +247,7 @@ export const setSiigoPurchaseInvoiceData = async (data, params) => {
 
         // Calcular amount dependiendo de la parametrización, redondeado a 2 decimales
         let amount
-        if(calculatePayment && taxesInCalculation){
+        if (calculatePayment && taxesInCalculation) {
             amount = invoice.Detalle_Documento.reduce((sum, item) => sum + (item.Precio * item.Unidades), 0).toFixed(2);
         } else {
             amount = invoice.Detalle_Documento.reduce((sum, item) => {
@@ -315,7 +315,7 @@ export const setSiigoSalesInvoiceData = async (data, params) => {
             code: item.Ref_Articulo,
             quantity: item.Unidades,
             price: item.Precio,
-            discount: item. Descuento
+            discount: item.Descuento
         })),
         payments: invoice.Medio_Pago.map(payment => ({
             id: payment.Medio_De_Pago,
@@ -385,7 +385,7 @@ export const getTaxesByName = async (hioposTaxes) => {
         let taxName = rawName?.trim();
         const taxPercentage = hioposTax.Porcentaje_Impuesto ?? hioposTax.Porcentaje_Retencion;
         if (!taxName) return null;
-        if(taxName === 'EXENTOS') taxName = 'IVA 0%';
+        if (taxName === 'EXENTOS') taxName = 'IVA 0%';
         const normalizedTaxName = taxName.toLowerCase();
         const matchedTax = taxList.find(siigoTax => siigoTax.name.toLowerCase() === normalizedTaxName);
 
@@ -421,6 +421,7 @@ export const createPurchaseInvoice = async (data) => {
 }
 
 export const createSaleInvoice = async (data) => {
+    console.log("jorge data", JSON.stringify(data))
     try {
         const options = await getSiigoHeadersOptions()
         const url = `${SIIGO_BASE_URL}/v1/invoices`
@@ -449,7 +450,7 @@ const getInvetoryGroups = async () => {
     try {
         const options = await getSiigoHeadersOptions()
         const url = `${SIIGO_BASE_URL}/v1/account-groups`
-        const response = await axios.get(url,options)
+        const response = await axios.get(url, options)
         return response.data
     } catch (error) {
         handleServiceError(error)
@@ -599,11 +600,11 @@ export const createContact = async (type, contact) => {
     const options = await getSiigoHeadersOptions()
     const url = `${SIIGO_BASE_URL}/v1/customers`
     try {
-        if (type === '/vendors'){
+        if (type === '/vendors') {
             const data = setVendorContactData(contact)
             const supplier = await axios.post(url, data, options)
             return supplier.data
-        }else if (type === '/customers') {
+        } else if (type === '/customers') {
             const data = setCustomerContactData(contact);
             const customer = await axios.post(url, data, options);
             return customer.data
@@ -619,7 +620,7 @@ const getSiigoPaymentMethods = async (documentType) => {
     const url = `${SIIGO_BASE_URL}/v1/payment-types?document_type=${documentType}`
     try {
         const response = await axios.get(url, options)
-        return {type:documentType, payments:response.data}
+        return { type: documentType, payments: response.data }
     } catch (error) {
         handleServiceError(error)
     }
@@ -657,7 +658,7 @@ const getDocumentIdByType = async (documentType) => {
         const options = await getSiigoHeadersOptions()
         const url = `${SIIGO_BASE_URL}/v1/document-types?type=${documentType}`
         const response = await axios.get(url, options)
-        return {type:documentType, documents:response.data}
+        return { type: documentType, documents: response.data }
     } catch (error) {
         handleServiceError(error)
     }
@@ -689,7 +690,7 @@ const getCostCenters = async () => {
         const url = `${SIIGO_BASE_URL}/v1/cost-centers`
         const response = await axios.get(url, options)
         return response.data
-    }catch (error) {
+    } catch (error) {
         handleServiceError(error)
     }
 }
@@ -711,25 +712,6 @@ export const matchCostCenter = async (hioposCostCenter) => {
         message: `El centro de costo "${hioposCostCenter}" no se encuentra registrado en Siigo.`,
     };
 };
-/*export const setItemDataForInvoice = async (item, type) => {
-    try {
-        const taxName = item.DetalleImpuesto ?? item.Impuestos; // Usa el primer valor definido
-        const taxes = taxName ? await getTaxesByName(taxName) : []; // Asegura que siempre haya un array
-
-        return {
-            type: 'Product',
-            code: item.Ref_Articulo,
-            description: item.Articulo,
-            quantity: item.Unidades,
-            price: type === 'sales' ? item.Base : item.Precio, // Condición según el tipo
-            discount: item.Descuento,
-            taxes,
-        };
-    } catch (error) {
-        handleServiceError(error);
-        return null; // Retorna un valor manejable en caso de error
-    }
-};*/
 
 /*export const setItemDataForInvoice = async (item, type) => {
     try {
@@ -768,7 +750,7 @@ export const matchCostCenter = async (hioposCostCenter) => {
     }
 };*/
 
-/*export const setItemDataForInvoice = async (item, type) => {
+export const setItemDataForInvoice = async (item, type) => {
     try {
         const taxArray = item.DetalleImpuesto ?? item.Impuestos ?? [];
 
@@ -803,55 +785,6 @@ export const matchCostCenter = async (hioposCostCenter) => {
             discount: item.Descuento,
             taxes,
             ...(type === 'sales' ? { taxed_price } : { price }),
-        };
-    } catch (error) {
-        handleServiceError(error);
-        return null;
-    }
-};*/
-export const setItemDataForInvoice = async (item, type) => {
-    try {
-        const taxArray = item.Detalle_Impuesto ?? item.Impuestos ?? [];
-        const cargosAdaptados = (item.Cargos ?? []).map(cargo => ({
-            Nombre_Impuesto: cargo.Nombre_Cargo,
-            Valor_Cargo: cargo.Valor_Cargo ?? 0,
-            Porcentaje_Impuesto: 0, // Para que pase el filtro
-        }));
-
-        const impuestosCombinados = [...taxArray, ...cargosAdaptados];
-
-        // 🆕 Incluir también las retefuente como impuestos
-        const retencionesArticulo = item.Retenciones_Articulo ?? [];
-        const retefuentes = retencionesArticulo
-            .filter(ret => {
-                const nombre = ret.Retencion?.toLowerCase() ?? '';
-                return nombre.includes('fuente');
-            })
-            .map(ret => ({
-                Nombre_Impuesto: ret.Retencion,
-                Porcentaje_Impuesto: ret['Porcentaje_Retencion'] ?? 0,
-            }));
-
-        const allTributaries = [...impuestosCombinados, ...retefuentes];
-
-        //console.log('All tributes:', allTributaries)
-
-        const taxes = allTributaries.length > 0
-            ? await getTaxesByName(allTributaries)
-            : [];
-
-        const price = item.Precio;
-
-        if (type === 'sales' && price === 0) return null;
-
-        return {
-            type: 'Product',
-            code: item.Ref_Articulo,
-            description: item.Articulo,
-            quantity: item.Unidades,
-            discount: item.Descuento ?? item["Porcentaje_Descuento"] ?? 0,
-            taxes,
-            ...(type === 'sales' ? { taxed_price: price } : { price }),
         };
     } catch (error) {
         handleServiceError(error);

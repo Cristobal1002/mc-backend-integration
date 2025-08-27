@@ -1,8 +1,8 @@
-import {hioposService, parametrizationService, siigoService} from "./index.js";
-import {model} from "../models/index.js";
-import {DateTime} from "luxon";
+import { hioposService, parametrizationService, siigoService } from "./index.js";
+import { model } from "../models/index.js";
+import { DateTime } from "luxon";
 import { Op } from 'sequelize';
-import {createSaleInvoice, getTaxesByName, setItemDataForInvoice} from "./siigo.service.js";
+import { createSaleInvoice, getTaxesByName, setItemDataForInvoice } from "./siigo.service.js";
 
 export const getHioposLote = async (type, filter, isManual = false, runSync = false, jobId = null) => {
     let lote;
@@ -93,6 +93,74 @@ const normalizeText = (text) => {
 };
 
 export const processLoteTransactions = async (type, lote, loteHeader) => {
+    /* try {
+         const loteId = loteHeader.id;
+         let processedCount = 0;
+         let omittedCount = 0;
+         let hasErrors = false;
+ 
+         for (const invoice of lote) {
+             try {
+                 const params = await parametrizationService.getParametrizationData();
+ 
+                 const rawTipo = invoice.Tipo_Documento;
+                 const tipoNormalizado = normalizeText(rawTipo);
+ 
+                 //console.log(`[TX LOOP] Documento: ${invoice.Serie_Numero || invoice['Serie_Numero']} - Tipo: ${rawTipo} (normalizado: ${tipoNormalizado})`);
+ 
+                 // Detección por fragmentos clave (tolerante a errores de escritura)
+                 const isCompra = tipoNormalizado.includes('factura') &&
+                     tipoNormalizado.includes('compra');
+ 
+                 const isVenta = tipoNormalizado.includes('factura') &&
+                     tipoNormalizado.includes('venta')
+ 
+                 if (
+                     (type === 'purchases' && isCompra) ||
+                     (type === 'sales' && isVenta)
+                 ) {
+                     //console.log(`[TX LOOP] ✅ Tipo válido. Intentando registrar transacción...`);
+ 
+                     const coreData = type === 'purchases'
+                         ? await siigoService.setSiigoPurchaseInvoiceData([invoice], params)
+                         : await siigoService.setSiigoSalesInvoiceData([invoice], params);
+ 
+                     const transaction = await registerTransaction(type, invoice, coreData[0], loteId);
+ 
+                     if (transaction) {
+                         processedCount++;
+                         //console.log(`[TX LOOP] ✅ Transacción registrada: ${transaction.document_number}`);
+                     } else {
+                         omittedCount++;
+                         //console.log(`[TX LOOP] ⚠️ Transacción omitida (posible duplicado).`);
+                     }
+                 } else {
+                     omittedCount++;
+                     //console.log(`[TX LOOP] ❌ Tipo omitido. No coincide con '${type}'. Tipo normalizado: "${tipoNormalizado}"`);
+                 }
+             } catch (error) {
+                 console.error('[PROCESS TRANSACTION ERROR]', invoice, error);
+                 hasErrors = true;
+             }
+         }
+ 
+         //console.log(`[PROCESS LOTE] ✔️ Procesadas: ${processedCount}, ❌ Omitidas: ${omittedCount}`);
+ 
+         await model.LoteModel.update(
+             { transactions_count: processedCount, omitted_count: omittedCount },
+             { where: { id: loteId } }
+         );
+ 
+         if (hasErrors) {
+             console.warn('[PROCESS LOTE] ⚠️ Algunas transacciones fallaron durante el registro.');
+         }
+ 
+         return { processed: processedCount, omitted: omittedCount };
+     } catch (error) {
+         console.error('[PROCESS LOTE TRANSACTIONS] 💥 Error procesando lote:', error);
+         throw error;
+     }*/
+
     try {
         const loteId = loteHeader.id;
         let processedCount = 0;
@@ -104,22 +172,25 @@ export const processLoteTransactions = async (type, lote, loteHeader) => {
                 const params = await parametrizationService.getParametrizationData();
 
                 const rawTipo = invoice.Tipo_Documento;
-                const tipoNormalizado = normalizeText(rawTipo);
+                const tipoNormalizado = normalizeText(rawTipo); // ej: "factura venta simplificada"
 
-                //console.log(`[TX LOOP] Documento: ${invoice.Serie_Numero || invoice['Serie_Numero']} - Tipo: ${rawTipo} (normalizado: ${tipoNormalizado})`);
+                const isCompra = tipoNormalizado.includes('factura') && tipoNormalizado.includes('compra');
+                const isVenta = tipoNormalizado.includes('factura') && tipoNormalizado.includes('venta');
 
-                // Detección por fragmentos clave (tolerante a errores de escritura)
-                const isCompra = tipoNormalizado.includes('factura') &&
-                    tipoNormalizado.includes('compra');
+                const isVentaSimplificada =
+                    isVenta && /\bfactura\s+venta\s+simplificad[ao]\b/.test(tipoNormalizado);
 
-                const isVenta = tipoNormalizado.includes('factura') &&
-                    tipoNormalizado.includes('venta')
+                if (type === 'sales' && isVentaSimplificada) {
+                    omittedCount++;
+                    // console.log(`[TX LOOP] ❌ Venta simplificada omitida: ${invoice.Serie_Numero || invoice['Serie_Numero']}`);
+                    continue; // no procesar ni registrar esta factura
+                }
 
                 if (
                     (type === 'purchases' && isCompra) ||
                     (type === 'sales' && isVenta)
                 ) {
-                    //console.log(`[TX LOOP] ✅ Tipo válido. Intentando registrar transacción...`);
+                    // console.log(`[TX LOOP] ✅ Tipo válido. Intentando registrar transacción...`);
 
                     const coreData = type === 'purchases'
                         ? await siigoService.setSiigoPurchaseInvoiceData([invoice], params)
@@ -129,14 +200,14 @@ export const processLoteTransactions = async (type, lote, loteHeader) => {
 
                     if (transaction) {
                         processedCount++;
-                        //console.log(`[TX LOOP] ✅ Transacción registrada: ${transaction.document_number}`);
+                        // console.log(`[TX LOOP] ✅ Transacción registrada: ${transaction.document_number}`);
                     } else {
                         omittedCount++;
-                        //console.log(`[TX LOOP] ⚠️ Transacción omitida (posible duplicado).`);
+                        // console.log(`[TX LOOP] ⚠️ Transacción omitida (posible duplicado).`);
                     }
                 } else {
                     omittedCount++;
-                    //console.log(`[TX LOOP] ❌ Tipo omitido. No coincide con '${type}'. Tipo normalizado: "${tipoNormalizado}"`);
+                    // console.log(`[TX LOOP] ❌ Tipo omitido. No coincide con '${type}'. Tipo normalizado: "${tipoNormalizado}"`);
                 }
             } catch (error) {
                 console.error('[PROCESS TRANSACTION ERROR]', invoice, error);
@@ -144,7 +215,7 @@ export const processLoteTransactions = async (type, lote, loteHeader) => {
             }
         }
 
-        //console.log(`[PROCESS LOTE] ✔️ Procesadas: ${processedCount}, ❌ Omitidas: ${omittedCount}`);
+        // console.log(`[PROCESS LOTE] ✔️ Procesadas: ${processedCount}, ❌ Omitidas: ${omittedCount}`);
 
         await model.LoteModel.update(
             { transactions_count: processedCount, omitted_count: omittedCount },
@@ -160,6 +231,8 @@ export const processLoteTransactions = async (type, lote, loteHeader) => {
         console.error('[PROCESS LOTE TRANSACTIONS] 💥 Error procesando lote:', error);
         throw error;
     }
+
+
 };
 
 
@@ -251,9 +324,10 @@ export const registerTransaction = async (type, hioposData, coreData, loteId) =>
 
 export const syncDataProcess = async ({ purchaseTransactions = null, salesTransactions = null } = {}) => {
     try {
-        // Validar y sincronizar compras si hay transacciones válidas
+
         const hasPurchases = Array.isArray(purchaseTransactions) && purchaseTransactions.length > 0;
         console.log('Validación compra:', hasPurchases);
+
 
         if (hasPurchases) {
             console.log('Entra a la compra');
@@ -296,10 +370,12 @@ export const syncDataProcess = async ({ purchaseTransactions = null, salesTransa
 };
 export const getValidationRegisterData = async (type) => {
     try {
-      return await model.TransactionModel.findAll({where: {
-          status: 'validation',
-              type
-          }, raw: true})
+        return await model.TransactionModel.findAll({
+            where: {
+                status: 'validation',
+                type
+            }, raw: true
+        })
     } catch (error) {
         console.error('Error al traer los datos de la BD', error);
         throw error;
@@ -308,10 +384,12 @@ export const getValidationRegisterData = async (type) => {
 
 export const getInvoicesToCreation = async (type) => {
     try {
-        return await model.TransactionModel.findAll({where: {
+        return await model.TransactionModel.findAll({
+            where: {
                 status: 'to-invoice',
                 type
-            }, raw: true})
+            }, raw: true
+        })
     } catch (error) {
         console.error('Error al traer los datos de la BD', error);
         throw error;
@@ -611,7 +689,7 @@ export const purchaseValidator = async (data = null) => {
     }
 };
 
-const purchaseInvoiceSync = async (data  = null) => {
+const purchaseInvoiceSync = async (data = null) => {
     try {
         //console.log('Data en sync purchase invoice:', data)
         const invoices = (data && data.length > 0)
@@ -855,7 +933,7 @@ export const salesValidator = async (data = null) => {
                         items_validator_status: itemsStatus,
                         items_validator_details: itemsValidationResults,
                     }, { where: { id: currentInvoice.id } });
-
+                
                     let siigoItem = [];
 
                     //Esto es para Jorge, aqui se agrgan los impuestos de los articulos
@@ -873,7 +951,7 @@ export const salesValidator = async (data = null) => {
                                     Unidades: mod.Unidades,
                                     Precio: mod.Precio,
                                     Descuento: 0,
-                                    DetalleImpuesto: [],
+                                    DetalleImpuesto: mod.Detalle_Impuesto,
                                     RetencionesArticulo: [],
                                     Cargos: []
                                 };
