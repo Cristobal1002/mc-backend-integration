@@ -717,7 +717,7 @@ const purchaseInvoiceSync = async (data = null) => {
 };
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-export const salesValidator = async (data = null) => {
+/*export const salesValidator = async (data = null) => {
     try {
         const validationInfo =
             Array.isArray(data) && data.length > 0
@@ -881,10 +881,10 @@ export const salesValidator = async (data = null) => {
                         await delay(rateLimitDelay);
 
                         // ✅ Validar modificadores (sin detener el flujo)
-                        if (Array.isArray(item.Modificadores_Articulo)) {
+                        /*if (Array.isArray(item.Modificadores_Articulo)) {
                             for (const mod of item.Modificadores_Articulo) {
                                 const modRef = mod.Referencia || mod.Ref_Articulo;
-                                if (!modRef || mod.Precio <= 0) continue;
+                                if (!modRef || mod.Precio <= 0 ) continue;
 
                                 const dummyItem = {
                                     Ref_Articulo: modRef,
@@ -923,7 +923,116 @@ export const salesValidator = async (data = null) => {
 
                                 await delay(rateLimitDelay);
                             }
+                        }*===
+
+
+
+                        // Utilidad: convierto a array seguro
+                        const toArray = (v) => Array.isArray(v) ? v : (v ? [v] : []);
+
+                        // Recolecta TODOS los modificadores con precio > 0 en cualquier nivel (DFS)
+                        const collectPricedModifiers = (mods) => {
+                            console.log('[collectPricedModifiers] Iniciando con', mods?.length, 'mods');
+                            const results = [];
+                            const stack = toArray(mods).filter(Boolean);
+
+                            while (stack.length) {
+                                const m = stack.pop();
+                                if (!m || typeof m !== 'object') continue;
+
+                                console.log(' Revisando mod:', m.Articulo, 'Precio:', m.Precio);
+
+                                // Primero empujo sus hijos al stack para seguir recorriendo
+                                if (m.Modificadores_Articulo) {
+                                    console.log('  Tiene hijos:', m.Modificadores_Articulo.length);
+                                    for (const child of toArray(m.Modificadores_Articulo)) {
+                                        if (child) stack.push(child);
+                                    }
+                                }
+
+                                // Si este modificador tiene precio > 0, lo guardo
+                                const precio = Number(m.Precio || 0);
+                                if (Number.isFinite(precio) && precio > 0) {
+                                    console.log('  ✅ Mod con precio > 0 encontrado:', m.Articulo, 'Ref:', m.Referencia || m.Ref_Articulo);
+                                    results.push(m);
+                                }
+                            }
+                            console.log('[collectPricedModifiers] Finalizó. Encontrados:', results.length);
+                            return results;
+                        };
+
+                        if (Array.isArray(item.Modificadores_Articulo)) {
+                            console.log('[Main] Recorriendo modificadores de item:', item.Articulo);
+
+                            // 1) Recojo TODOS los mods con precio > 0 (incluye nietos y más)
+                            const pricedMods = collectPricedModifiers(item.Modificadores_Articulo);
+
+                            console.log('[Main] pricedMods encontrados:', pricedMods.map(m => `${m.Articulo} (${m.Precio})`));
+
+                            for (const mod of pricedMods) {
+                                const modRef = mod.Referencia || mod.Ref_Articulo || mod.Cod_Barra || mod.Cod_Articulo;
+                                console.log(' Procesando mod:', mod.Articulo, 'Ref:', modRef, 'Precio:', mod.Precio);
+
+                                if (!modRef) {
+                                    console.warn(' ⚠️ Mod con precio > 0 pero sin referencia!');
+                                    itemsValidationResults.push({
+                                        item: '(sin_ref)',
+                                        status: 'failed',
+                                        details: { error: 'Modificador con precio > 0 sin referencia' }
+                                    });
+                                    continue;
+                                }
+
+                                const detalleImpuesto = Array.isArray(mod.Detalle_Impuesto) ? mod.Detalle_Impuesto
+                                    : Array.isArray(mod.DetalleImpuesto) ? mod.DetalleImpuesto
+                                        : [];
+
+                                const dummyItem = {
+                                    Ref_Articulo: modRef,
+                                    Articulo: mod.Articulo,
+                                    Precio: Number(mod.Precio || 0),
+                                    Unidades: Number(mod.Unidades || 1),
+                                    Detalle_Impuesto: detalleImpuesto,
+                                    Retenciones_Articulo: [],
+                                    Cargos: [],
+                                    Descuento: 0
+                                };
+
+                                console.log('  DummyItem listo:', dummyItem);
+
+                                const siigoMod = await siigoService.getItemByCode(modRef);
+                                if (!siigoMod || !siigoMod.results || siigoMod.results.length === 0) {
+                                    try {
+                                        console.log('  No existe en Siigo, creando:', modRef);
+                                        const createdMod = await siigoService.createSiigoItem(dummyItem);
+                                        itemsValidationResults.push({
+                                            item: modRef,
+                                            status: 'success',
+                                            details: createdMod
+                                        });
+                                    } catch (error) {
+                                        console.error('  ❌ Error creando en Siigo:', error);
+                                        itemsValidationResults.push({
+                                            item: modRef,
+                                            status: 'failed',
+                                            details: { error: error.data?.Errors || error.message }
+                                        });
+                                    }
+                                } else {
+                                    console.log('  Ya existe en Siigo:', siigoMod.results[0]);
+                                    itemsValidationResults.push({
+                                        item: modRef,
+                                        status: 'success',
+                                        details: siigoMod.results[0]
+                                    });
+                                }
+
+                                await delay(rateLimitDelay);
+                            }
                         }
+
+
+
                     }
 
                     // ⚠️ Aun si hay errores, se registran todos y se sigue
@@ -933,7 +1042,7 @@ export const salesValidator = async (data = null) => {
                         items_validator_status: itemsStatus,
                         items_validator_details: itemsValidationResults,
                     }, { where: { id: currentInvoice.id } });
-                
+
                     let siigoItem = [];
 
                     //Esto es para Jorge, aqui se agrgan los impuestos de los articulos
@@ -1078,7 +1187,456 @@ export const salesValidator = async (data = null) => {
         console.error('Error general del validador de ventas:', error);
         throw error;
     }
+};*/
+
+
+export const salesValidator = async (data = null) => {
+    try {
+        const validationInfo =
+            Array.isArray(data) && data.length > 0
+                ? data
+                : await getValidationRegisterData('sales');
+
+        if (!validationInfo.length) {
+            console.warn('[SALES VALIDATOR] No hay transacciones para procesar.');
+            return;
+        }
+
+        // 🔄 Resetear estado de transacciones antes de validarlas
+        const ids = validationInfo.map(tx => tx.id).filter(Boolean);
+        await resetTransactionState(ids);
+
+        const batchSize = 25;
+        const rateLimitDelay = 900;
+
+        // ===== Helpers globales (evitan redefinir dentro de bucles) =====
+        const delay = (ms) => new Promise(res => setTimeout(res, ms)); // por si no existiera en el scope
+        const toArray = (v) => Array.isArray(v) ? v : (v ? [v] : []);
+        // Recolecta TODOS los modificadores con precio > 0 en cualquier nivel (DFS)
+        const collectPricedModifiers = (mods) => {
+            console.log('[collectPricedModifiers] start. mods len:', mods?.length);
+            const results = [];
+            const stack = toArray(mods).filter(Boolean);
+            while (stack.length) {
+                const m = stack.pop();
+                if (!m || typeof m !== 'object') continue;
+
+                console.log('  visit:', m.Articulo, 'Precio:', m.Precio);
+
+                // hijos
+                if (m.Modificadores_Articulo) {
+                    const hijos = toArray(m.Modificadores_Articulo);
+                    console.log('   hijos:', hijos.length);
+                    for (const h of hijos) stack.push(h);
+                }
+
+                const precio = Number(m.Precio || 0);
+                if (Number.isFinite(precio) && precio > 0) {
+                    console.log('  ✅ priced mod:', m.Articulo, 'Ref:', m.Referencia || m.Ref_Articulo || m.Cod_Barra || m.Cod_Articulo);
+                    results.push(m);
+                }
+            }
+            console.log('[collectPricedModifiers] done. found:', results.length);
+            return results;
+        };
+
+        const batches = [];
+        for (let i = 0; i < validationInfo.length; i += batchSize) {
+            batches.push(validationInfo.slice(i, i + batchSize));
+        }
+
+        for (const batch of batches) {
+            for (const currentInvoice of batch) {
+                const { identification } = currentInvoice.core_data.customer;
+                const { Medio_Pago, Detalle_Documento, Detalle_Totales } = currentInvoice.hiopos_data;
+                const invoiceDate = DateTime.fromISO(currentInvoice.hiopos_data.Fecha);
+                const dueDate = invoiceDate.plus({ days: 30 }).toISODate();
+
+                const invoiceData = {
+                    date: currentInvoice.hiopos_data.Fecha,
+                    observations: currentInvoice.core_data.observations,
+                    discount_type: 'Percentage',
+                    number: currentInvoice.hiopos_data.Numero,
+                    seller: 936
+                };
+
+                try {
+                    const siigoDocument = await siigoService.matchDocumentTypeByName('FV', currentInvoice.hiopos_data.Serie);
+                    if (!siigoDocument || !siigoDocument.id) {
+                        await model.TransactionModel.update({
+                            document_validator_status: 'failed',
+                            document_validator_details: siigoDocument,
+                        }, { where: { id: currentInvoice.id } });
+                    } else {
+                        await model.TransactionModel.update({
+                            document_validator_status: 'success',
+                            document_validator_details: siigoDocument,
+                        }, { where: { id: currentInvoice.id } });
+                        invoiceData.document = siigoDocument;
+                    }
+
+                    let coce;
+                    const { cost_center_default } = invoiceData.document;
+                    if (cost_center_default) {
+                        coce = cost_center_default;
+                        await model.TransactionModel.update({
+                            cost_center_validator_status: 'default',
+                            cost_center_validator_details: { name: 'Cost Center by defaul', id: coce },
+                        }, { where: { id: currentInvoice.id } });
+                        invoiceData.cost_center = coce;
+                        delete invoiceData.document.cost_center_default;
+                    } else {
+                        coce = await siigoService.matchCostCenter(currentInvoice.hiopos_data.Almacen);
+                        if (!coce || !coce.id) {
+                            await model.TransactionModel.update({
+                                cost_center_validator_status: 'failed',
+                                cost_center_validator_details: coce,
+                            }, { where: { id: currentInvoice.id } });
+                        } else {
+                            await model.TransactionModel.update({
+                                cost_center_validator_status: 'success',
+                                cost_center_validator_details: coce,
+                            }, { where: { id: currentInvoice.id } });
+                            invoiceData.cost_center = coce.id;
+                            delete invoiceData.document.cost_center_default;
+                        }
+                    }
+
+                    const siigoContact = await siigoService.getContactsByIdentification(identification);
+                    if (!siigoContact || siigoContact.results.length === 0) {
+                        const hioposContact = await hioposService.getContactByDocument('/customers', identification);
+                        const createdCustomer = await siigoService.createContact('/customers', hioposContact);
+
+                        if (createdCustomer) {
+                            await model.TransactionModel.update({
+                                contact_validator_status: 'success',
+                                contact_validator_details: [
+                                    { message: 'Cliente creado exitosamente', customerId: createdCustomer.id },
+                                ],
+                            }, { where: { id: currentInvoice.id } });
+
+                            invoiceData.customer = {
+                                id: createdCustomer.id,
+                                identification: createdCustomer.identification,
+                                id_type: createdCustomer.id_type.code,
+                                person_type: createdCustomer.person_type,
+                                name: createdCustomer.name,
+                                address: createdCustomer.address,
+                                phones: createdCustomer.phones,
+                                contact: createdCustomer.contact,
+                            };
+                        } else {
+                            await model.TransactionModel.update({
+                                contact_validator_status: 'failed',
+                                contact_validator_details: [
+                                    { error: 'Error al crear el Cliente en Siigo' },
+                                ],
+                            }, { where: { id: currentInvoice.id } });
+                            return;
+                        }
+                    } else {
+                        await model.TransactionModel.update({
+                            contact_validator_status: 'success',
+                            contact_validator_details: [
+                                { message: 'Cliente encontrado', CustomerId: siigoContact.results[0].id },
+                            ],
+                        }, { where: { id: currentInvoice.id } });
+
+                        invoiceData.customer = {
+                            id: siigoContact.results[0].id,
+                            identification: siigoContact.results[0].identification,
+                            id_type: siigoContact.results[0].id_type.code,
+                            person_type: siigoContact.results[0].person_type,
+                            name: siigoContact.results[0].name,
+                            address: siigoContact.results[0].address,
+                            phones: siigoContact.results[0].phones || [{ number: "6012770000" }],
+                            contact: siigoContact.results[0].contact,
+                        };
+                    }
+
+                    const itemsValidationResults = [];
+
+                    // ====== VALIDACIÓN de existencia de ítems y modificadores con precio > 0 ======
+                    for (const item of Detalle_Documento) {
+                        const ref = item.Ref_Articulo;
+                        const siigoItem = await siigoService.getItemByCode(ref);
+                        if (!siigoItem || siigoItem.results.length === 0) {
+                            try {
+                                const createdItem = await siigoService.createSiigoItem(item);
+                                itemsValidationResults.push({
+                                    item: ref,
+                                    status: 'success',
+                                    details: createdItem
+                                });
+                            } catch (error) {
+                                itemsValidationResults.push({
+                                    item: ref,
+                                    status: 'failed',
+                                    details: { error: error.data?.Errors || error.message }
+                                });
+                            }
+                        } else {
+                            itemsValidationResults.push({
+                                item: ref,
+                                status: 'success',
+                                details: siigoItem.results[0]
+                            });
+                        }
+
+                        await delay(rateLimitDelay);
+
+                        // —— Recoge y valida modificadores con precio > 0 en cualquier nivel (con logs) ——
+                        if (Array.isArray(item.Modificadores_Articulo)) {
+                            console.log('[Main-Validation] Recorriendo modificadores de item:', item.Articulo);
+                            const pricedMods = collectPricedModifiers(item.Modificadores_Articulo);
+                            console.log('[Main-Validation] pricedMods encontrados:', pricedMods.map(m => `${m.Articulo} (${m.Precio})`));
+
+                            for (const mod of pricedMods) {
+                                const modRef = mod.Referencia || mod.Ref_Articulo || mod.Cod_Barra || mod.Cod_Articulo;
+                                console.log('  [Validation] Procesando mod:', mod.Articulo, 'Ref:', modRef, 'Precio:', mod.Precio);
+
+                                if (!modRef) {
+                                    console.warn('   ⚠️ Mod con precio > 0 pero sin referencia!');
+                                    itemsValidationResults.push({
+                                        item: '(sin_ref)',
+                                        status: 'failed',
+                                        details: { error: 'Modificador con precio > 0 sin referencia' }
+                                    });
+                                    continue;
+                                }
+
+                                const detalleImpuesto = Array.isArray(mod.Detalle_Impuesto) ? mod.Detalle_Impuesto
+                                    : Array.isArray(mod.DetalleImpuesto) ? mod.DetalleImpuesto
+                                        : [];
+
+                                const dummyItem = {
+                                    Ref_Articulo: modRef,
+                                    Articulo: mod.Articulo,
+                                    Precio: Number(mod.Precio || 0),
+                                    Unidades: Number(mod.Unidades || 1),
+                                    Detalle_Impuesto: detalleImpuesto,
+                                    Retenciones_Articulo: [],
+                                    Cargos: [],
+                                    Descuento: 0
+                                };
+
+                                console.log('   [Validation] DummyItem listo:', dummyItem);
+
+                                const siigoMod = await siigoService.getItemByCode(modRef);
+                                if (!siigoMod || !siigoMod.results || siigoMod.results.length === 0) {
+                                    try {
+                                        console.log('   [Validation] No existe en Siigo, creando:', modRef);
+                                        const createdMod = await siigoService.createSiigoItem(dummyItem);
+                                        itemsValidationResults.push({
+                                            item: modRef,
+                                            status: 'success',
+                                            details: createdMod
+                                        });
+                                    } catch (error) {
+                                        console.error('   ❌ Error creando en Siigo:', error);
+                                        itemsValidationResults.push({
+                                            item: modRef,
+                                            status: 'failed',
+                                            details: { error: error.data?.Errors || error.message }
+                                        });
+                                    }
+                                } else {
+                                    console.log('   [Validation] Ya existe en Siigo:', siigoMod.results[0]);
+                                    itemsValidationResults.push({
+                                        item: modRef,
+                                        status: 'success',
+                                        details: siigoMod.results[0]
+                                    });
+                                }
+
+                                await delay(rateLimitDelay);
+                            }
+                        }
+                    }
+
+                    // ⚠️ Aun si hay errores, se registran todos y se sigue
+                    const itemsStatus = itemsValidationResults.some(r => r.status === 'failed') ? 'failed' : 'success';
+
+                    await model.TransactionModel.update({
+                        items_validator_status: itemsStatus,
+                        items_validator_details: itemsValidationResults,
+                    }, { where: { id: currentInvoice.id } });
+
+                    // ====== ARMADO DE LÍNEAS PARA LA FACTURA ======
+                    let siigoItem = [];
+
+                    for (const item of Detalle_Documento) {
+                        // ⚠️ Evitar doble conteo: al padre NO le pasamos los modificadores
+                        const parentItem = { ...item };
+                        delete parentItem.Modificadores_Articulo;
+
+                        console.log('[Items] Padre:', parentItem.Articulo, 'Precio:', parentItem.Precio);
+
+                        // Línea del padre (con sus propios impuestos)
+                        const formattedItem = await siigoService.setItemDataForInvoice(parentItem, 'sales');
+                        if (formattedItem) {
+                            console.log('  + push padre:', formattedItem.code, formattedItem.description, formattedItem.taxed_price ?? formattedItem.price);
+                            siigoItem.push(formattedItem);
+                        } else {
+                            console.log('  (padre sin línea: price 0 o inválido)');
+                        }
+
+                        // Líneas de modificadores con precio > 0 en cualquier nivel
+                        if (Array.isArray(item.Modificadores_Articulo)) {
+                            const pricedMods = collectPricedModifiers(item.Modificadores_Articulo);
+                            console.log('[Items] pricedMods para', item.Articulo, ':', pricedMods.map(m => `${m.Articulo}(${m.Precio})`));
+
+                            for (const mod of pricedMods) {
+                                const modRef = mod.Referencia || mod.Ref_Articulo || mod.Cod_Barra || mod.Cod_Articulo;
+                                const detalleImpuesto = Array.isArray(mod.Detalle_Impuesto) ? mod.Detalle_Impuesto
+                                    : Array.isArray(mod.DetalleImpuesto) ? mod.DetalleImpuesto
+                                        : [];
+
+                                const adaptedMod = {
+                                    Ref_Articulo: modRef,
+                                    Articulo: mod.Articulo,
+                                    Unidades: Number(mod.Unidades || 1),
+                                    Precio: Number(mod.Precio || 0),
+                                    Descuento: 0,
+                                    // Soportamos ambas variantes de llave por si el normalizador cambia:
+                                    Detalle_Impuesto: detalleImpuesto,
+                                    DetalleImpuesto: detalleImpuesto,
+                                    Retenciones_Articulo: [],
+                                    RetencionesArticulo: [],
+                                    Cargos: []
+                                };
+
+                                console.log('  -> adapt mod:', adaptedMod.Ref_Articulo, adaptedMod.Articulo, adaptedMod.Precio);
+
+                                const formattedMod = await siigoService.setItemDataForInvoice(adaptedMod, 'sales');
+                                if (formattedMod) {
+                                    console.log('     + push mod:', formattedMod.code, formattedMod.description, formattedMod.taxed_price ?? formattedMod.price);
+                                    siigoItem.push(formattedMod);
+                                } else {
+                                    console.log('     (mod descartado: price 0 o inválido)');
+                                }
+                            }
+                        }
+                    }
+
+                    invoiceData.items = siigoItem;
+
+                    // 🚨 Validación final antes de guardar
+                    if (!invoiceData.items || invoiceData.items.length === 0) {
+                        throw new Error('No se encontraron ítems válidos para facturar');
+                    }
+
+                    // Propina
+                    const propina = Detalle_Totales.Entrada_Propina;
+                    if (propina && typeof propina.Valor_Propina === 'number' && !isNaN(propina.Valor_Propina)) {
+                        siigoItem.push({
+                            code: 'PROP01',
+                            type: 'Service',
+                            description: 'Propina',
+                            quantity: 1,
+                            taxed_price: propina.Valor_Propina
+                        });
+                    }
+
+                    // ====== PAYMENTS ======
+                    const paymentsValidationResults = [];
+                    for (const payment of Medio_Pago) {
+                        try {
+                            const siigoMethod = await siigoService.getPaymentsByName('FV', payment);
+                            if (!siigoMethod || !siigoMethod.id) {
+                                paymentsValidationResults.push({
+                                    id: null,
+                                    name: payment.Medio_De_Pago,
+                                    value: payment.Valor,
+                                    status: 'failed',
+                                    details: [`El método de pago "${payment.Medio_De_Pago}" no existe en Siigo`],
+                                });
+                            } else {
+                                paymentsValidationResults.push({
+                                    id: siigoMethod.id,
+                                    name: siigoMethod.name,
+                                    value: payment.Valor,
+                                    due_date: dueDate,
+                                    status: 'success',
+                                    details: [`Método de pago "${siigoMethod.name}" procesado correctamente.`],
+                                });
+                            }
+                        } catch (error) {
+                            paymentsValidationResults.push({
+                                id: null,
+                                name: payment.Medio_De_Pago,
+                                value: payment.Valor,
+                                status: 'failed',
+                                details: [`Error procesando el método de pago "${payment.Medio_De_Pago}"`],
+                            });
+                        }
+                        await delay(rateLimitDelay);
+                    }
+
+                    const paymentsStatus = paymentsValidationResults.some(p => p.status === 'failed') ? 'failed' : 'success';
+                    await model.TransactionModel.update({
+                        payments_validator_status: paymentsStatus,
+                        payments_validator_details: paymentsValidationResults,
+                    }, { where: { id: currentInvoice.id } });
+
+                    const groupedPayments = Object.values(
+                        paymentsValidationResults
+                            .filter(p => p.status !== 'failed')
+                            .reduce((acc, curr) => {
+                                if (!acc[curr.id]) {
+                                    acc[curr.id] = {
+                                        id: curr.id,
+                                        name: curr.name,
+                                        value: 0,
+                                        due_date: curr.due_date
+                                    };
+                                }
+                                acc[curr.id].value += curr.value;
+                                return acc;
+                            }, {})
+                    );
+
+                    invoiceData.payments = groupedPayments;
+                    invoiceData.items = siigoItem;
+
+                    //console.log('Datos preparados para la factura:', invoiceData);
+
+                    const endValidation = await model.TransactionModel.findByPk(currentInvoice.id);
+                    const validationFields = [
+                        'document_validator_status',
+                        'cost_center_validator_status',
+                        'contact_validator_status',
+                        'items_validator_status',
+                        'payments_validator_status'
+                    ];
+
+                    const allSuccessOrDefault = validationFields.every(field =>
+                        endValidation[field] === 'success' || endValidation[field] === 'default'
+                    );
+
+                    endValidation.siigo_body = invoiceData;
+                    endValidation.status = allSuccessOrDefault ? 'to-invoice' : 'failed';
+
+                    await endValidation.save();
+                    await delay(rateLimitDelay);
+
+                } catch (validationError) {
+                    console.error(`Error procesando factura de venta ID: ${currentInvoice.id}`, validationError);
+                    await model.TransactionModel.update({
+                        error: validationError.message,
+                        status: 'failed',
+                    }, { where: { id: currentInvoice.id } });
+                }
+
+                await delay(rateLimitDelay);
+            }
+        }
+    } catch (error) {
+        console.error('Error general del validador de ventas:', error);
+        throw error;
+    }
 };
+
 
 
 const saleInvoiceSync = async (data = null) => {
