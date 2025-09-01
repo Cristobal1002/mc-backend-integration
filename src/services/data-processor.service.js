@@ -1039,11 +1039,11 @@ export const salesValidator = async (data = null) => {
                                         return Number.isFinite(n) ? n : NaN;
                                     };
 
-                                    // 1) Porcentaje_Descuento explícito
+                                    // 1) Porcentaje explícito
                                     const pctKey = num(m.Porcentaje_Descuento);
                                     if (Number.isFinite(pctKey) && pctKey > 0 && pctKey <= 100) return +pctKey.toFixed(4);
 
-                                    // 2) Descuento si está en rango 0–100 (lo tratamos como %)
+                                    // 2) "Descuento" en rango 0–100 => % directo
                                     const descKey = num(m.Descuento);
                                     if (Number.isFinite(descKey) && descKey > 0 && descKey <= 100) return +descKey.toFixed(4);
 
@@ -1057,7 +1057,38 @@ export const salesValidator = async (data = null) => {
                                         return +Math.min(100, Math.max(0, pct)).toFixed(4);
                                     }
 
-                                    return 0; // no hay descuento
+                                    // 4) Fallback A: si viene Neto (< Precio), inferir % desc desde Neto
+                                    const neto = num(m.Neto);
+                                    if (Number.isFinite(neto) && price > 0 && neto > 0 && neto < price) {
+                                        const pct = (1 - (neto / price)) * 100;
+                                        if (pct > 0.01) return +Math.min(100, Math.max(0, pct)).toFixed(4);
+                                    }
+
+                                    // 5) Fallback B: si viene Base y conocemos IVA, inferir base sin desc y comparar
+                                    const base = num(m.Base);
+                                    if (Number.isFinite(base) && base > 0 && price > 0) {
+                                        // intenta sacar el IVA del arreglo de impuestos del mod
+                                        const ivaPct = (() => {
+                                            const det = Array.isArray(m.Detalle_Impuesto) ? m.Detalle_Impuesto
+                                                : Array.isArray(m.DetalleImpuesto) ? m.DetalleImpuesto
+                                                    : [];
+                                            const iva = det.find(t =>
+                                                String(t?.Nombre_Impuesto || '').toLowerCase().includes('iva') &&
+                                                Number.isFinite(num(t.Porcentaje_Impuesto))
+                                            );
+                                            return num(iva?.Porcentaje_Impuesto);
+                                        })();
+
+                                        if (Number.isFinite(ivaPct) && ivaPct >= 0) {
+                                            const baseTeorica = price / (1 + (ivaPct / 100)); // base sin descuento si no hubiera desc
+                                            if (baseTeorica > 0 && base < baseTeorica) {
+                                                const pct = (1 - (base / baseTeorica)) * 100;
+                                                if (pct > 0.01) return +Math.min(100, Math.max(0, pct)).toFixed(4);
+                                            }
+                                        }
+                                    }
+
+                                    return 0; // no hay forma de inferir descuento
                                 };
 
                                 const modDiscPct = getModDiscountPct(mod);
