@@ -718,7 +718,7 @@ const purchaseInvoiceSync = async (data = null) => {
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 
-/*export const salesValidator = async (data = null) => {
+export const salesValidator = async (data = null) => {
     try {
         const validationInfo =
             Array.isArray(data) && data.length > 0
@@ -1163,11 +1163,11 @@ const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
         console.error('Error general del validador de ventas:', error);
         throw error;
     }
-};*/
+};
 
 
 
-export const salesValidator = async (data = null) => {
+/*export const salesValidator = async (data = null) => {
     try {
         const validationInfo =
             Array.isArray(data) && data.length > 0
@@ -1659,7 +1659,7 @@ export const salesValidator = async (data = null) => {
         console.error('Error general del validador de ventas:', error);
         throw error;
     }
-};
+};*/
 
 
 
