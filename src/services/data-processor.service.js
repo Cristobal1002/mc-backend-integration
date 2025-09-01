@@ -1020,12 +1020,55 @@ export const salesValidator = async (data = null) => {
                                     : Array.isArray(mod.DetalleImpuesto) ? mod.DetalleImpuesto
                                         : [];
 
-                                const adaptedMod = {
+                                /*const adaptedMod = {
                                     Ref_Articulo: modRef,
                                     Articulo: mod.Articulo,
                                     Unidades: Number(mod.Unidades || 1),
                                     Precio: Number(mod.Precio || 0),
                                     Descuento: 0,
+                                    // Soportamos ambas variantes de llave por si el normalizador cambia:
+                                    Detalle_Impuesto: detalleImpuesto,
+                                    DetalleImpuesto: detalleImpuesto,
+                                    Retenciones_Articulo: [],
+                                    RetencionesArticulo: [],
+                                    Cargos: []
+                                };*/
+                                const getModDiscountPct = (m) => {
+                                    const num = (v) => {
+                                        const n = typeof v === 'string' ? Number(v.replace(',', '.')) : Number(v);
+                                        return Number.isFinite(n) ? n : NaN;
+                                    };
+
+                                    // 1) Porcentaje_Descuento explícito
+                                    const pctKey = num(m.Porcentaje_Descuento);
+                                    if (Number.isFinite(pctKey) && pctKey > 0 && pctKey <= 100) return +pctKey.toFixed(4);
+
+                                    // 2) Descuento si está en rango 0–100 (lo tratamos como %)
+                                    const descKey = num(m.Descuento);
+                                    if (Number.isFinite(descKey) && descKey > 0 && descKey <= 100) return +descKey.toFixed(4);
+
+                                    // 3) Importe_Descuentos → convertir a %
+                                    const qty = num(m.Unidades) || 1;
+                                    const price = num(m.Precio) || 0;
+                                    const gross = qty * price;
+                                    const amt = num(m.Importe_Descuentos);
+                                    if (Number.isFinite(amt) && amt > 0 && gross > 0) {
+                                        const pct = (amt / gross) * 100;
+                                        return +Math.min(100, Math.max(0, pct)).toFixed(4);
+                                    }
+
+                                    return 0; // no hay descuento
+                                };
+
+                                const modDiscPct = getModDiscountPct(mod);
+
+                                const adaptedMod = {
+                                    Ref_Articulo: modRef,
+                                    Articulo: mod.Articulo,
+                                    Unidades: Number(mod.Unidades || 1),
+                                    Precio: Number(mod.Precio || 0),
+                                    // 👇 solo enviamos descuento si existe (>0)
+                                    ...(modDiscPct > 0 ? { Descuento: modDiscPct, Porcentaje_Descuento: modDiscPct } : {}),
                                     // Soportamos ambas variantes de llave por si el normalizador cambia:
                                     Detalle_Impuesto: detalleImpuesto,
                                     DetalleImpuesto: detalleImpuesto,
@@ -1164,502 +1207,6 @@ export const salesValidator = async (data = null) => {
         throw error;
     }
 };
-
-
-
-/*export const salesValidator = async (data = null) => {
-    try {
-        const validationInfo =
-            Array.isArray(data) && data.length > 0
-                ? data
-                : await getValidationRegisterData('sales');
-
-        if (!validationInfo.length) {
-            console.warn('[SALES VALIDATOR] No hay transacciones para procesar.');
-            return;
-        }
-
-        // 🔄 Resetear estado de transacciones antes de validarlas
-        const ids = validationInfo.map(tx => tx.id).filter(Boolean);
-        await resetTransactionState(ids);
-
-        const batchSize = 25;
-        const rateLimitDelay = 900;
-
-        // ===== Helpers globales =====
-        const delay = (ms) => new Promise(res => setTimeout(res, ms));
-        const toArray = (v) => Array.isArray(v) ? v : (v ? [v] : []);
-
-        const num = (v, d = 0) => {
-            const n = typeof v === 'string' ? Number(v.replace(',', '.')) : Number(v);
-            return Number.isFinite(n) ? n : d;
-        };
-
-        // % por línea a partir de distintas fuentes (prioridad: Porcentaje_Descuento > Descuento% > Importe_Descuentos)
-        const computeLineDiscountPct = (item) => {
-            const qty = num(item.Unidades, 1);
-            const price = num(item.Precio, 0);
-            const gross = Math.max(0, qty * price);
-
-            const pctKey = item.Porcentaje_Descuento;
-            const pctKeyNum = num(pctKey, NaN);
-            if (Number.isFinite(pctKeyNum) && pctKeyNum >= 0 && pctKeyNum <= 100) {
-                return +pctKeyNum.toFixed(4);
-            }
-
-            const disc = item.Descuento;
-            const discNum = num(disc, NaN);
-            if (Number.isFinite(discNum) && discNum >= 0 && discNum <= 100) {
-                // Lo tratamos como porcentaje si está en 0-100
-                return +discNum.toFixed(4);
-            }
-
-            const amt = num(item.Importe_Descuentos, NaN);
-            if (Number.isFinite(amt) && amt > 0 && gross > 0) {
-                const pct = (amt / gross) * 100;
-                return +Math.min(100, Math.max(0, pct)).toFixed(4);
-            }
-
-            return 0;
-        };
-
-        // Recolecta TODOS los modificadores con precio > 0 en cualquier nivel (DFS)
-        const collectPricedModifiers = (mods) => {
-            console.log('[collectPricedModifiers] start. mods len:', mods?.length);
-            const results = [];
-            const stack = toArray(mods).filter(Boolean);
-            while (stack.length) {
-                const m = stack.pop();
-                if (!m || typeof m !== 'object') continue;
-
-                console.log('  visit:', m.Articulo, 'Precio:', m.Precio);
-
-                // hijos
-                if (m.Modificadores_Articulo) {
-                    const hijos = toArray(m.Modificadores_Articulo);
-                    console.log('   hijos:', hijos.length);
-                    for (const h of hijos) stack.push(h);
-                }
-
-                const precio = num(m.Precio, 0);
-                if (precio > 0) {
-                    console.log('  ✅ priced mod:', m.Articulo, 'Ref:', m.Referencia || m.Ref_Articulo || m.Cod_Barra || m.Cod_Articulo);
-                    results.push(m);
-                }
-            }
-            console.log('[collectPricedModifiers] done. found:', results.length);
-            return results;
-        };
-
-        const batches = [];
-        for (let i = 0; i < validationInfo.length; i += batchSize) {
-            batches.push(validationInfo.slice(i, i + batchSize));
-        }
-
-        for (const batch of batches) {
-            for (const currentInvoice of batch) {
-                const { identification } = currentInvoice.core_data.customer;
-                const { Medio_Pago, Detalle_Documento, Detalle_Totales } = currentInvoice.hiopos_data;
-                const invoiceDate = DateTime.fromISO(currentInvoice.hiopos_data.Fecha);
-                const dueDate = invoiceDate.plus({ days: 30 }).toISODate();
-
-                const invoiceData = {
-                    date: currentInvoice.hiopos_data.Fecha,
-                    observations: currentInvoice.core_data.observations,
-                    discount_type: 'Percentage',   // 🔑 vamos a mandar % por línea / cabecera
-                    number: currentInvoice.hiopos_data.Numero,
-                    seller: 936
-                };
-
-                try {
-                    // ===== Documento =====
-                    const siigoDocument = await siigoService.matchDocumentTypeByName('FV', currentInvoice.hiopos_data.Serie);
-                    if (!siigoDocument || !siigoDocument.id) {
-                        await model.TransactionModel.update({
-                            document_validator_status: 'failed',
-                            document_validator_details: siigoDocument,
-                        }, { where: { id: currentInvoice.id } });
-                    } else {
-                        await model.TransactionModel.update({
-                            document_validator_status: 'success',
-                            document_validator_details: siigoDocument,
-                        }, { where: { id: currentInvoice.id } });
-                        invoiceData.document = siigoDocument;
-                    }
-
-                    // ===== Centro de costo =====
-                    let coce;
-                    const { cost_center_default } = invoiceData.document;
-                    if (cost_center_default) {
-                        coce = cost_center_default;
-                        await model.TransactionModel.update({
-                            cost_center_validator_status: 'default',
-                            cost_center_validator_details: { name: 'Cost Center by defaul', id: coce },
-                        }, { where: { id: currentInvoice.id } });
-                        invoiceData.cost_center = coce;
-                        delete invoiceData.document.cost_center_default;
-                    } else {
-                        coce = await siigoService.matchCostCenter(currentInvoice.hiopos_data.Almacen);
-                        if (!coce || !coce.id) {
-                            await model.TransactionModel.update({
-                                cost_center_validator_status: 'failed',
-                                cost_center_validator_details: coce,
-                            }, { where: { id: currentInvoice.id } });
-                        } else {
-                            await model.TransactionModel.update({
-                                cost_center_validator_status: 'success',
-                                cost_center_validator_details: coce,
-                            }, { where: { id: currentInvoice.id } });
-                            invoiceData.cost_center = coce.id;
-                            delete invoiceData.document.cost_center_default;
-                        }
-                    }
-
-                    // ===== Contacto =====
-                    const siigoContact = await siigoService.getContactsByIdentification(identification);
-                    if (!siigoContact || siigoContact.results.length === 0) {
-                        const hioposContact = await hioposService.getContactByDocument('/customers', identification);
-                        const createdCustomer = await siigoService.createContact('/customers', hioposContact);
-
-                        if (createdCustomer) {
-                            await model.TransactionModel.update({
-                                contact_validator_status: 'success',
-                                contact_validator_details: [
-                                    { message: 'Cliente creado exitosamente', customerId: createdCustomer.id },
-                                ],
-                            }, { where: { id: currentInvoice.id } });
-
-                            invoiceData.customer = {
-                                id: createdCustomer.id,
-                                identification: createdCustomer.identification,
-                                id_type: createdCustomer.id_type.code,
-                                person_type: createdCustomer.person_type,
-                                name: createdCustomer.name,
-                                address: createdCustomer.address,
-                                phones: createdCustomer.phones,
-                                contact: createdCustomer.contact,
-                            };
-                        } else {
-                            await model.TransactionModel.update({
-                                contact_validator_status: 'failed',
-                                contact_validator_details: [
-                                    { error: 'Error al crear el Cliente en Siigo' },
-                                ],
-                            }, { where: { id: currentInvoice.id } });
-                            return;
-                        }
-                    } else {
-                        await model.TransactionModel.update({
-                            contact_validator_status: 'success',
-                            contact_validator_details: [
-                                { message: 'Cliente encontrado', CustomerId: siigoContact.results[0].id },
-                            ],
-                        }, { where: { id: currentInvoice.id } });
-
-                        invoiceData.customer = {
-                            id: siigoContact.results[0].id,
-                            identification: siigoContact.results[0].identification,
-                            id_type: siigoContact.results[0].id_type.code,
-                            person_type: siigoContact.results[0].person_type,
-                            name: siigoContact.results[0].name,
-                            address: siigoContact.results[0].address,
-                            phones: siigoContact.results[0].phones || [{ number: "6012770000" }],
-                            contact: siigoContact.results[0].contact,
-                        };
-                    }
-
-                    const itemsValidationResults = [];
-
-                    // ====== VALIDACIÓN existencia ítems + mods con precio > 0 ======
-                    for (const item of Detalle_Documento) {
-                        const ref = item.Ref_Articulo;
-                        const siigoItem = await siigoService.getItemByCode(ref);
-                        if (!siigoItem || siigoItem.results.length === 0) {
-                            try {
-                                const createdItem = await siigoService.createSiigoItem(item);
-                                itemsValidationResults.push({ item: ref, status: 'success', details: createdItem });
-                            } catch (error) {
-                                itemsValidationResults.push({ item: ref, status: 'failed', details: { error: error.data?.Errors || error.message } });
-                            }
-                        } else {
-                            itemsValidationResults.push({ item: ref, status: 'success', details: siigoItem.results[0] });
-                        }
-
-                        await delay(rateLimitDelay);
-
-                        if (Array.isArray(item.Modificadores_Articulo)) {
-                            console.log('[Main-Validation] Recorriendo modificadores de item:', item.Articulo);
-                            const pricedMods = collectPricedModifiers(item.Modificadores_Articulo);
-                            console.log('[Main-Validation] pricedMods encontrados:', pricedMods.map(m => `${m.Articulo} (${m.Precio})`));
-
-                            for (const mod of pricedMods) {
-                                const modRef = mod.Referencia || mod.Ref_Articulo || mod.Cod_Barra || mod.Cod_Articulo;
-                                console.log('  [Validation] Procesando mod:', mod.Articulo, 'Ref:', modRef, 'Precio:', mod.Precio);
-
-                                if (!modRef) {
-                                    console.warn('   ⚠️ Mod con precio > 0 pero sin referencia!');
-                                    itemsValidationResults.push({ item: '(sin_ref)', status: 'failed', details: { error: 'Modificador con precio > 0 sin referencia' } });
-                                    continue;
-                                }
-
-                                const detalleImpuesto = Array.isArray(mod.Detalle_Impuesto) ? mod.Detalle_Impuesto
-                                    : Array.isArray(mod.DetalleImpuesto) ? mod.DetalleImpuesto : [];
-
-                                const dummyItem = {
-                                    Ref_Articulo: modRef,
-                                    Articulo: mod.Articulo,
-                                    Precio: num(mod.Precio, 0),
-                                    Unidades: num(mod.Unidades, 1),
-                                    Detalle_Impuesto: detalleImpuesto,
-                                    Retenciones_Articulo: [],
-                                    Cargos: [],
-                                    // 👇 inyectamos % descuento del mod (si aplica)
-                                    Porcentaje_Descuento: computeLineDiscountPct(mod),
-                                    Descuento: computeLineDiscountPct(mod), // por compatibilidad con setItemDataForInvoice
-                                };
-
-                                console.log('   [Validation] DummyItem listo:', dummyItem);
-
-                                const siigoMod = await siigoService.getItemByCode(modRef);
-                                if (!siigoMod || !siigoMod.results || siigoMod.results.length === 0) {
-                                    try {
-                                        console.log('   [Validation] No existe en Siigo, creando:', modRef);
-                                        const createdMod = await siigoService.createSiigoItem(dummyItem);
-                                        itemsValidationResults.push({ item: modRef, status: 'success', details: createdMod });
-                                    } catch (error) {
-                                        console.error('   ❌ Error creando en Siigo:', error);
-                                        itemsValidationResults.push({ item: modRef, status: 'failed', details: { error: error.data?.Errors || error.message } });
-                                    }
-                                } else {
-                                    console.log('   [Validation] Ya existe en Siigo:', siigoMod.results[0]);
-                                    itemsValidationResults.push({ item: modRef, status: 'success', details: siigoMod.results[0] });
-                                }
-
-                                await delay(rateLimitDelay);
-                            }
-                        }
-                    }
-
-                    const itemsStatus = itemsValidationResults.some(r => r.status === 'failed') ? 'failed' : 'success';
-                    await model.TransactionModel.update({
-                        items_validator_status: itemsStatus,
-                        items_validator_details: itemsValidationResults,
-                    }, { where: { id: currentInvoice.id } });
-
-                    // ====== ARMADO DE LÍNEAS (con descuentos) ======
-                    let siigoItem = [];
-                    let sumGross = 0;           // para evaluar posible descuento a nivel cabecera
-                    let sumLineDiscAmt = 0;     // suma de descuentos por línea (monto)
-
-                    for (const item of Detalle_Documento) {
-                        // Evitar doble conteo de impuestos de hijos
-                        const parentItem = { ...item };
-                        delete parentItem.Modificadores_Articulo;
-
-                        // 👇 calcular % descuento del padre y setear las llaves esperadas
-                        const parentDiscPct = computeLineDiscountPct(parentItem);
-                        parentItem.Porcentaje_Descuento = parentDiscPct;
-                        parentItem.Descuento = parentDiscPct;
-
-                        // acumular base bruta y descuento monto
-                        const pQty = num(parentItem.Unidades, 1);
-                        const pPrice = num(parentItem.Precio, 0);
-                        const pGross = pQty * pPrice;
-                        const pDiscAmt = pGross * (parentDiscPct / 100);
-                        sumGross += pGross;
-                        sumLineDiscAmt += pDiscAmt;
-
-                        console.log('[Items] Padre:', parentItem.Articulo, 'Precio:', pPrice, 'Desc%:', parentDiscPct);
-
-                        const formattedItem = await siigoService.setItemDataForInvoice(parentItem, 'sales');
-                        if (formattedItem) {
-                            console.log('  + push padre:', formattedItem.code, formattedItem.description, formattedItem.taxed_price ?? formattedItem.price, 'disc%:', parentDiscPct);
-                            siigoItem.push(formattedItem);
-                        } else {
-                            console.log('  (padre sin línea: price 0 o inválido)');
-                        }
-
-                        // —— Mods con precio > 0 —— //
-                        if (Array.isArray(item.Modificadores_Articulo)) {
-                            const pricedMods = collectPricedModifiers(item.Modificadores_Articulo);
-                            console.log('[Items] pricedMods para', item.Articulo, ':', pricedMods.map(m => `${m.Articulo}(${m.Precio})`));
-
-                            for (const mod of pricedMods) {
-                                const modRef = mod.Referencia || mod.Ref_Articulo || mod.Cod_Barra || mod.Cod_Articulo;
-                                const detalleImpuesto = Array.isArray(mod.Detalle_Impuesto) ? mod.Detalle_Impuesto
-                                    : Array.isArray(mod.DetalleImpuesto) ? mod.DetalleImpuesto : [];
-
-                                const modDiscPct = computeLineDiscountPct(mod);
-
-                                const adaptedMod = {
-                                    Ref_Articulo: modRef,
-                                    Articulo: mod.Articulo,
-                                    Unidades: num(mod.Unidades, 1),
-                                    Precio: num(mod.Precio, 0),
-                                    Descuento: modDiscPct,
-                                    Porcentaje_Descuento: modDiscPct,
-                                    Detalle_Impuesto: detalleImpuesto,
-                                    DetalleImpuesto: detalleImpuesto,
-                                    Retenciones_Articulo: [],
-                                    RetencionesArticulo: [],
-                                    Cargos: []
-                                };
-
-                                // acumular base bruta y descuento monto del mod
-                                const mGross = adaptedMod.Unidades * adaptedMod.Precio;
-                                const mDiscAmt = mGross * (modDiscPct / 100);
-                                sumGross += mGross;
-                                sumLineDiscAmt += mDiscAmt;
-
-                                console.log('  -> adapt mod:', adaptedMod.Ref_Articulo, adaptedMod.Articulo, adaptedMod.Precio, 'desc%:', modDiscPct);
-
-                                const formattedMod = await siigoService.setItemDataForInvoice(adaptedMod, 'sales');
-                                if (formattedMod) {
-                                    console.log('     + push mod:', formattedMod.code, formattedMod.description, formattedMod.taxed_price ?? formattedMod.price, 'disc%:', modDiscPct);
-                                    siigoItem.push(formattedMod);
-                                } else {
-                                    console.log('     (mod descartado: price 0 o inválido)');
-                                }
-                            }
-                        }
-                    }
-
-                    invoiceData.items = siigoItem;
-
-                    // 🚨 Validación final antes de guardar
-                    if (!invoiceData.items || invoiceData.items.length === 0) {
-                        throw new Error('No se encontraron ítems válidos para facturar');
-                    }
-
-                    // —— Propina —— //
-                    const propina = Detalle_Totales.Entrada_Propina;
-                    if (propina && typeof propina.Valor_Propina === 'number' && !isNaN(propina.Valor_Propina)) {
-                        siigoItem.push({
-                            code: 'PROP01',
-                            type: 'Service',
-                            description: 'Propina',
-                            quantity: 1,
-                            taxed_price: propina.Valor_Propina
-                        });
-                    }
-
-                    // —— Descuento a nivel CABECERA (si aplica y no hay descuentos por línea) —— //
-                    try {
-                        const totalDocDisc = num(Detalle_Totales?.Total_Descuento, 0);
-                        if (totalDocDisc > 0 && sumGross > 0) {
-                            // si ya distribuimos descuentos por línea (~0.5% tolerancia), no dupliquemos
-                            const approxLines = Math.round(sumLineDiscAmt);
-                            const approxDoc = Math.round(totalDocDisc);
-                            if (approxLines === 0 || Math.abs(approxLines - approxDoc) <= Math.max(1, approxDoc * 0.005)) {
-                                const headerPct = Math.min(100, Math.max(0, (totalDocDisc / sumGross) * 100));
-                                if (headerPct > 0) {
-                                    invoiceData.discount = +headerPct.toFixed(4);
-                                    console.log('[Header Discount] Aplicado % cabecera:', invoiceData.discount, '(totalDocDisc:', totalDocDisc, 'sumGross:', sumGross, ')');
-                                }
-                            } else {
-                                console.log('[Header Discount] Omitido para evitar doble conteo. sumLineDiscAmt:', sumLineDiscAmt, 'totalDocDisc:', totalDocDisc);
-                            }
-                        }
-                    } catch (e) {
-                        console.warn('[Header Discount] No se pudo calcular descuento de cabecera:', e?.message);
-                    }
-
-                    // ====== PAYMENTS ======
-                    const paymentsValidationResults = [];
-                    for (const payment of Medio_Pago) {
-                        try {
-                            const siigoMethod = await siigoService.getPaymentsByName('FV', payment);
-                            if (!siigoMethod || !siigoMethod.id) {
-                                paymentsValidationResults.push({
-                                    id: null,
-                                    name: payment.Medio_De_Pago,
-                                    value: payment.Valor,
-                                    status: 'failed',
-                                    details: [`El método de pago "${payment.Medio_De_Pago}" no existe en Siigo`],
-                                });
-                            } else {
-                                paymentsValidationResults.push({
-                                    id: siigoMethod.id,
-                                    name: siigoMethod.name,
-                                    value: payment.Valor,
-                                    due_date: dueDate,
-                                    status: 'success',
-                                    details: [`Método de pago "${siigoMethod.name}" procesado correctamente.`],
-                                });
-                            }
-                        } catch (error) {
-                            paymentsValidationResults.push({
-                                id: null,
-                                name: payment.Medio_De_Pago,
-                                value: payment.Valor,
-                                status: 'failed',
-                                details: [`Error procesando el método de pago "${payment.Medio_De_Pago}"`],
-                            });
-                        }
-                        await delay(rateLimitDelay);
-                    }
-
-                    const paymentsStatus = paymentsValidationResults.some(p => p.status === 'failed') ? 'failed' : 'success';
-                    await model.TransactionModel.update({
-                        payments_validator_status: paymentsStatus,
-                        payments_validator_details: paymentsValidationResults,
-                    }, { where: { id: currentInvoice.id } });
-
-                    const groupedPayments = Object.values(
-                        paymentsValidationResults
-                            .filter(p => p.status !== 'failed')
-                            .reduce((acc, curr) => {
-                                if (!acc[curr.id]) {
-                                    acc[curr.id] = {
-                                        id: curr.id,
-                                        name: curr.name,
-                                        value: 0,
-                                        due_date: curr.due_date
-                                    };
-                                }
-                                acc[curr.id].value += curr.value;
-                                return acc;
-                            }, {})
-                    );
-
-                    invoiceData.payments = groupedPayments;
-                    invoiceData.items = siigoItem;
-
-                    const endValidation = await model.TransactionModel.findByPk(currentInvoice.id);
-                    const validationFields = [
-                        'document_validator_status',
-                        'cost_center_validator_status',
-                        'contact_validator_status',
-                        'items_validator_status',
-                        'payments_validator_status'
-                    ];
-
-                    const allSuccessOrDefault = validationFields.every(field =>
-                        endValidation[field] === 'success' || endValidation[field] === 'default'
-                    );
-
-                    endValidation.siigo_body = invoiceData;
-                    endValidation.status = allSuccessOrDefault ? 'to-invoice' : 'failed';
-
-                    await endValidation.save();
-                    await delay(rateLimitDelay);
-
-                } catch (validationError) {
-                    console.error(`Error procesando factura de venta ID: ${currentInvoice.id}`, validationError);
-                    await model.TransactionModel.update({
-                        error: validationError.message,
-                        status: 'failed',
-                    }, { where: { id: currentInvoice.id } });
-                }
-
-                await delay(rateLimitDelay);
-            }
-        }
-    } catch (error) {
-        console.error('Error general del validador de ventas:', error);
-        throw error;
-    }
-};*/
 
 
 
