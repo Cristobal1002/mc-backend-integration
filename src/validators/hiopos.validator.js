@@ -44,3 +44,21 @@ export const vendorBody = [
             return true;
         })
 ];
+
+// Validador para borrado físico de lotes por rango de fechas
+export const deleteLotesByDateRange = [
+    body('startDate')
+        .exists({ checkFalsy: true }).withMessage('startDate es obligatorio')
+        .isString().withMessage('startDate debe ser un string')
+        .matches(/^\d{4}-\d{2}-\d{2}$/).withMessage('startDate debe tener el formato YYYY-MM-DD'),
+    body('endDate')
+        .exists({ checkFalsy: true }).withMessage('endDate es obligatorio')
+        .isString().withMessage('endDate debe ser un string')
+        .matches(/^\d{4}-\d{2}-\d{2}$/).withMessage('endDate debe tener el formato YYYY-MM-DD')
+        .custom((endDate, { req }) => {
+            if (req.body.startDate && endDate < req.body.startDate) {
+                throw new Error('endDate debe ser mayor o igual a startDate');
+            }
+            return true;
+        })
+];

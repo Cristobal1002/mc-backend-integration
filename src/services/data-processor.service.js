@@ -1457,3 +1457,92 @@ export const reprocessLote = async (loteId) => {
         throw error;
     }
 };
+
+export const deleteLotesByDateRange = async (startDate, endDate) => {
+    try {
+        if (!startDate || !endDate) {
+            throw new Error('Debe proporcionar startDate y endDate válidos.');
+        }
+
+        // Validar formato de fechas
+        const start = DateTime.fromISO(startDate);
+        const end = DateTime.fromISO(endDate);
+
+        if (!start.isValid || !end.isValid) {
+            throw new Error('Las fechas proporcionadas no son válidas.');
+        }
+
+        if (end < start) {
+            throw new Error('endDate debe ser mayor o igual a startDate.');
+        }
+
+        // 1️⃣ Buscar transacciones por document_date en el rango de fechas
+        const transactions = await model.TransactionModel.findAll({
+            where: {
+                document_date: {
+                    [Op.between]: [start.toISODate(), end.toISODate()]
+                }
+            },
+            attributes: ['lote_id'], // Solo necesitamos el lote_id
+            raw: true
+        });
+
+        if (!transactions || transactions.length === 0) {
+            return {
+                deletedLotes: 0,
+                deletedTransactions: 0,
+                message: 'No se encontraron transacciones en el rango de fechas especificado.'
+            };
+        }
+
+        // 2️⃣ Obtener los lote_id únicos de las transacciones encontradas
+        const uniqueLoteIds = [...new Set(transactions.map(tx => tx.lote_id).filter(Boolean))];
+
+        if (uniqueLoteIds.length === 0) {
+            return {
+                deletedLotes: 0,
+                deletedTransactions: 0,
+                message: 'No se encontraron lotes asociados a las transacciones en el rango de fechas especificado.'
+            };
+        }
+
+        // 3️⃣ Contar todas las transacciones de esos lotes (no solo las del rango)
+        const totalTransactions = await model.TransactionModel.count({
+            where: {
+                lote_id: {
+                    [Op.in]: uniqueLoteIds
+                }
+            }
+        });
+
+        // 4️⃣ Borrar físicamente todas las transacciones de esos lotes (force: true para bypass soft delete)
+        const deletedTransactions = await model.TransactionModel.destroy({
+            where: {
+                lote_id: {
+                    [Op.in]: uniqueLoteIds
+                }
+            },
+            force: true // Borrado físico
+        });
+
+        // 5️⃣ Borrar los lotes físicamente
+        const deletedLotes = await model.LoteModel.destroy({
+            where: {
+                id: {
+                    [Op.in]: uniqueLoteIds
+                }
+            },
+            force: true // Borrado físico
+        });
+
+        return {
+            deletedLotes,
+            deletedTransactions,
+            message: `Se eliminaron ${deletedLotes} lote(s) y ${deletedTransactions} transacción(es) basados en transacciones con document_date entre ${startDate} y ${endDate}.`
+        };
+
+    } catch (error) {
+        console.error('[DELETE LOTES BY DATE RANGE] Error:', error);
+        throw error;
+    }
+};

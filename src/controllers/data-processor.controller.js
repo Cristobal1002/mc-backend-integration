@@ -69,3 +69,13 @@ export const reprocessLote = async (req, res, next) => {
         next(error)
     }
 }
+
+export const deleteLotesByDateRange = async (req, res, next) => {
+    const { startDate, endDate } = req.body;
+    try {
+        const response = await dataProcessorService.deleteLotesByDateRange(startDate, endDate);
+        standardResponse(res, 200, response.message || 'Lotes y transacciones eliminados satisfactoriamente', response);
+    } catch (error) {
+        next(error);
+    }
+}
