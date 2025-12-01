@@ -46,6 +46,7 @@ export const vendorBody = [
 ];
 
 // Validador para borrado físico de lotes por rango de fechas
+// Nota: adminKey se valida en el middleware authMiddleware.requireAdminKey
 export const deleteLotesByDateRange = [
     body('startDate')
         .exists({ checkFalsy: true }).withMessage('startDate es obligatorio')
