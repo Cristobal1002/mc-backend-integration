@@ -5,37 +5,53 @@ import { sequelize } from '../database/index.js';
 import { Op, where, col, cast, literal } from 'sequelize';
 import {dateRange} from "../utils/index.js";
 
-export const getDailyStats = async ({ startDate, endDate } = {}) => {
+export const getDailyStats = async ({ startDate, endDate, type } = {}) => {
     try {
         const start = startDate || endDate;
         const end = endDate || startDate;
 
+        // Construir condición para lotes
+        const loteWhere = {
+            [Op.and]: [
+                literal(`CAST("LoteModel"."filter"->>'startDate' AS DATE) BETWEEN '${start}' AND '${end}'`)
+            ]
+        };
+
+        // Agregar filtro por tipo para lotes si se especifica
+        if (type) {
+            loteWhere.type = type;
+        }
+
         const lotesProcesados = await model.LoteModel.count({
-            where: literal(`CAST("LoteModel"."filter"->>'startDate' AS DATE) BETWEEN '${start}' AND '${end}'`)
+            where: loteWhere
         });
 
-        const totalTransacciones = await model.TransactionModel.count({
-            where: {
-                document_date: {
-                    [Op.between]: [start, end]
-                }
+        // Condición base para las transacciones
+        const baseWhere = {
+            document_date: {
+                [Op.between]: [start, end]
             }
+        };
+
+        // Agregar filtro por tipo para transacciones si se especifica
+        if (type) {
+            baseWhere.type = type;
+        }
+
+        const totalTransacciones = await model.TransactionModel.count({
+            where: baseWhere
         });
 
         const transaccionesExitosas = await model.TransactionModel.count({
             where: {
-                document_date: {
-                    [Op.between]: [start, end]
-                },
+                ...baseWhere,
                 status: 'success'
             }
         });
 
         const transaccionesFallidas = await model.TransactionModel.count({
             where: {
-                document_date: {
-                    [Op.between]: [start, end]
-                },
+                ...baseWhere,
                 status: 'failed'
             }
         });
@@ -95,10 +111,11 @@ export const getDailyStats = async ({ startDate, endDate } = {}) => {
         throw new Error("Error obteniendo transacciones");
     }
 }
-export const getProcessedLotes = async ({ startDate, endDate, source = null, page = 1, limit = 10 }) => {
+export const getProcessedLotes = async ({ startDate, endDate, source = null, page = 1, limit = 10, type = null }) => {
     const filters = [];
 
     if (source) filters.push(`l."source" = '${source}'`);
+    if (type) filters.push(`l."type" = '${type}'`);
     if (startDate || endDate) {
         const start = startDate || endDate;
         const end = endDate || startDate;

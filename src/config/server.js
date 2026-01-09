@@ -6,6 +6,7 @@ import cors from 'cors';
 import { sequelize } from '../database/index.js';
 import { syncDb } from '../models/index.js';
 import { startCronJobs } from './cron.config.js';
+import { seedPowerUser } from '../utils/seed-user.js';
 
 
 export default async () => {
@@ -23,7 +24,20 @@ export default async () => {
     app.use(express.json({ limit: '20mb' }));
     app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
+    // Sincronizar base de datos (crear/actualizar tablas)
     //await syncDb().then(() => console.log('Tablas sincronizadas'));
+
+    // Crear usuario power_user si no existe y actualizar existentes
+    await seedPowerUser();
+
+    // Inicializar servicio de email (verifica conexión)
+    try {
+        const { initializeEmailService } = await import('../services/email.service.js');
+        initializeEmailService();
+        console.log('📧 Servicio de email inicializado');
+    } catch (error) {
+        console.warn('⚠️  No se pudo inicializar el servicio de email:', error.message);
+    }
 
     routes(app);
     app.use(errorHandlerMiddleware.errorHandler); // Manejador de errores
@@ -33,6 +47,6 @@ export default async () => {
     });
 
     // Iniciar el cron
-    startCronJobs(); // Iniciar tareas programadas
+    //startCronJobs(); // Iniciar tareas programadas
 
 };
