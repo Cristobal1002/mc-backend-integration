@@ -34,6 +34,34 @@ let inventoryGroupsCacheExpiration = null;
 
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutos
 
+// ======= Caché de productos por código (para impuestos ADV/ICL) =======
+let productCacheByCode = {};
+let productCacheByCodeExpiration = {};
+
+const normalizeTaxName = (text) =>
+    text?.toString().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+
+const coerceEnvId = (v) => {
+    if (v === undefined || v === null) return null;
+    const s = v.toString().trim();
+    if (!s) return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : s; // Siigo suele usar IDs numéricos, pero soportamos string por seguridad
+};
+
+const getProductByCodeWithCache = async (code) => {
+    const now = Date.now();
+    if (!code) return null;
+
+    if (!productCacheByCode[code] || now > (productCacheByCodeExpiration[code] || 0)) {
+        const data = await getItemByCode(code);
+        // getItemByCode retorna response.data (con results)
+        productCacheByCode[code] = data ?? null;
+        productCacheByCodeExpiration[code] = now + CACHE_TTL_MS;
+    }
+    return productCacheByCode[code];
+};
+
 // ======= Helpers de caché =======
 
 const getTaxesWithCache = async () => {
@@ -915,6 +943,60 @@ export const setItemDataForInvoice = async (item, type) => {
     const taxes = allTributaries.length > 0
       ? await getTaxesByName(allTributaries) // ← tu resolutor por nombre + % a IDs de Siigo
       : [];
+
+    // ===== 6.1) Compras: Si el artículo en Siigo tiene ADV o ICL, forzar impuesto fijo por ENV =====
+    if (type === 'purchases') {
+      const code = item.Ref_Articulo ?? item.Referencia ?? item.Cod_Barra ?? item.Cod_Articulo;
+      const advEnvId = coerceEnvId(process.env.SIIGO_ADV_TAX_ID);
+      const iclEnvId = coerceEnvId(process.env.SIIGO_ICL_TAX_ID);
+      const anyFixedEnvId = coerceEnvId(process.env.SIIGO_FIXED_TAX_ID); // fallback opcional
+
+      // Solo vale la pena consultar si hay configuración disponible
+      if (code && (advEnvId || iclEnvId || anyFixedEnvId)) {
+        const productData = await getProductByCodeWithCache(code);
+        const product = productData?.results?.[0];
+        const productTaxes = Array.isArray(product?.taxes) ? product.taxes : [];
+
+        const hasADV = productTaxes.some(t => normalizeTaxName(t?.name) === 'adv');
+        const hasICL = productTaxes.some(t => normalizeTaxName(t?.name) === 'icl');
+
+        if (hasADV || hasICL) {
+          const fixedId =
+            (hasADV && advEnvId) ? advEnvId :
+            (hasICL && iclEnvId) ? iclEnvId :
+            anyFixedEnvId;
+
+          if (fixedId) {
+            // El resto de impuestos siguen igual; solo reemplazamos el/los fijos (ADV/ICL) por un único id fijo
+            const filtered = (taxes ?? []).filter(t => {
+              const n = normalizeTaxName(t?.name);
+              return n !== 'adv' && n !== 'icl';
+            });
+
+            filtered.push({
+              id: fixedId,
+              name: hasADV ? 'ADV' : 'ICL',
+              percentage: 0,
+              value: null,
+              status: 'fixed',
+            });
+
+            // Evitar duplicados por id
+            const seen = new Set();
+            const dedup = [];
+            for (const t of filtered) {
+              const key = `${t?.id}`;
+              if (!t?.id || seen.has(key)) continue;
+              seen.add(key);
+              dedup.push(t);
+            }
+            // eslint-disable-next-line no-param-reassign
+            taxes.length = 0;
+            taxes.push(...dedup);
+          }
+        }
+      }
+    }
 
     // ===== 7) Precio / salida =====
     const price = num(item.Precio);
