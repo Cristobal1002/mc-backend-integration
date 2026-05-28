@@ -1,5 +1,5 @@
 import axios from "axios";
-import { CustomError, handleServiceError } from "../errors/index.js";
+import { CustomError, handleServiceError, buildIntegrationError, IntegrationSource } from "../errors/index.js";
 import xml2js from "xml2js";
 import JSON5 from "json5";
 
@@ -17,6 +17,13 @@ let cachedHioposAddress = null;
 let hioposTokenExpiration = null;
 let isFetchingHioposToken = false; // Variable para manejar el bloqueo
 let hioposTokenPromise = null; // Promesa compartida durante la obtención del token
+
+/** Invalida el token en caché (p. ej. cuando Hiopos responde 401 en exportation/launch). */
+export const invalidateHioposToken = () => {
+    cachedHioposToken = null;
+    cachedHioposAddress = null;
+    hioposTokenExpiration = null;
+};
 
 /**
  * Limpia un JSON inválido en formato string.
@@ -174,9 +181,15 @@ const getHioposToken = async () => {
 
             if (jsonResponse.response.serverError) {
                 throw new CustomError({
-                    message: jsonResponse.response.serverError.message || 'Error en el servidor',
-                    code: 401,
-                    data: jsonResponse.response,
+                    message: `Hiopos: error al obtener token de autenticación — ${jsonResponse.response.serverError.message || 'credenciales inválidas'}`,
+                    code: 502,
+                    source: IntegrationSource.HIOPOS,
+                    data: {
+                        source: IntegrationSource.HIOPOS,
+                        operation: 'auth/getCustomerWithAuthToken',
+                        upstreamMessage: jsonResponse.response.serverError.message,
+                        response: jsonResponse.response,
+                    },
                 });
             }
 
@@ -184,8 +197,13 @@ const getHioposToken = async () => {
 
             if (!authToken) {
                 throw new CustomError({
-                    message: "La respuesta no contiene un token de autenticación",
-                    code: 500,
+                    message: 'Hiopos: la respuesta de autenticación no incluye token (authToken).',
+                    code: 502,
+                    source: IntegrationSource.HIOPOS,
+                    data: {
+                        source: IntegrationSource.HIOPOS,
+                        operation: 'auth/getCustomerWithAuthToken',
+                    },
                 });
             }
 
@@ -197,8 +215,16 @@ const getHioposToken = async () => {
             //console.log("Token de Hiopos guardado en caché");
             resolve({ authToken, address });
         } catch (error) {
-            console.error("Error en servicio (getHioposToken):", error);
-            reject(error);
+            console.error("Error en servicio (getHioposToken):", error?.message || error);
+            if (error instanceof CustomError) {
+                reject(error);
+            } else {
+                reject(buildIntegrationError({
+                    error,
+                    source: IntegrationSource.HIOPOS,
+                    operation: 'auth/getCustomerWithAuthToken',
+                }));
+            }
         } finally {
             isFetchingHioposToken = false;
             hioposTokenPromise = null; // Restablecer la promesa
@@ -211,7 +237,7 @@ const getHioposToken = async () => {
 /**
  * Obtiene las facturas de compra en base a un filtro.
  */
-export const getBridgeDataByType = async (servicio, filter) => {
+export const getBridgeDataByType = async (servicio, filter, isRetry = false) => {
     try {
         const connectionData = await getHioposToken()
         let exportationId = '';
@@ -252,8 +278,26 @@ export const getBridgeDataByType = async (servicio, filter) => {
 
         return { data: parseBase64Response(base64Data) };
     } catch (error) {
-        console.error("Error en servicio (getBridgeDataByType):", error);
-        handleServiceError(error);
+        const upstreamStatus = error?.response?.status;
+
+        // Token en caché expirado en servidor Hiopos: invalidar y reintentar una vez
+        if (upstreamStatus === 401 && !isRetry) {
+            console.warn('[Hiopos] Token rechazado (401) en exportation/launch. Invalidando caché y reintentando...');
+            invalidateHioposToken();
+            return getBridgeDataByType(servicio, filter, true);
+        }
+
+        console.error(`Error en servicio (getBridgeDataByType) [hiopos]${isRetry ? ' tras reintento' : ''}:`, error?.message || error);
+
+        if (error instanceof CustomError) {
+            throw error;
+        }
+
+        throw buildIntegrationError({
+            error,
+            source: IntegrationSource.HIOPOS,
+            operation: 'exportation/launch',
+        });
     }
 };
 

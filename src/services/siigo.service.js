@@ -1,5 +1,5 @@
 import axios from "axios";
-import { CustomError, handleServiceError } from "../errors/index.js";
+import { CustomError, handleServiceError, IntegrationSource } from "../errors/index.js";
 import { DateTime } from "luxon";
 import { model } from "../models/index.js";
 
@@ -14,6 +14,11 @@ let cachedSiigoToken = null;
 let tokenExpirationTime = null;
 let isFetchingToken = false; // Variable para manejar el bloqueo
 let tokenPromise = null; // Promesa compartida durante la obtención del token
+
+export const invalidateSiigoToken = () => {
+    cachedSiigoToken = null;
+    tokenExpirationTime = null;
+};
 
 // ======= Caché con expiración para múltiples recursos =======
 
@@ -139,7 +144,15 @@ export const getSiigoToken = async () => {
             const response = await axios.post(url, { username: SIIGO_USER, access_key: SIIGO_TOKEN });
 
             if (!response.data.access_token) {
-                throw new CustomError({ message: 'Acceso denegado a la API de Siigo', code: 401 });
+                throw new CustomError({
+                    message: 'Siigo: acceso denegado — no se recibió access_token en /auth.',
+                    code: 502,
+                    source: IntegrationSource.SIIGO,
+                    data: {
+                        source: IntegrationSource.SIIGO,
+                        operation: 'auth',
+                    },
+                });
             }
 
             // Almacenar el token y su tiempo de expiración (1 hora)
@@ -149,6 +162,7 @@ export const getSiigoToken = async () => {
             //console.log('Token de Siigo guardado en memoria');
             resolve(cachedSiigoToken);
         } catch (error) {
+            invalidateSiigoToken();
             console.error('Error obteniendo el token de Siigo:', error.message);
             reject(error);
         } finally {

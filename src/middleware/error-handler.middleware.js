@@ -13,6 +13,7 @@ export const errorHandler = async (err, req, res, next) => {
         return res.status(statusCode).json({
             status: 'error',
             message: serializedError.message || 'Error desconocido',
+            source: serializedError.source || serializedError.data?.source || null,
             data: serializedError.data || null, // Los detalles del error en "data"
         });
     }

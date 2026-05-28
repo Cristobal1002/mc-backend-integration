@@ -37,7 +37,8 @@ const processService = async (service, filters) => {
 
         console.log(`[${service}] Proceso completo (validación + sync)`);
     } catch (error) {
-        console.error(`Error al procesar el servicio ${service}:`, error.message || error);
+        const source = error?.source || error?.data?.source || 'desconocido';
+        console.error(`Error al procesar el servicio ${service} [origen: ${source}]:`, error.message || error);
     }
 };
 const executeCronTask = async () => {

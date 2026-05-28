@@ -1,18 +1,26 @@
-import {CustomError} from "./index.js"
+import { CustomError } from './custom.error.js';
+import { buildIntegrationError } from './integration.error.js';
 
-export const handleServiceError = (error) => {
-    //console.error("Error en servicio:", error);
+export const handleServiceError = (error, { operation, source } = {}) => {
+    if (error instanceof CustomError) {
+        throw error;
+    }
+
+    if (error?.response || error?.config?.url) {
+        throw buildIntegrationError({ error, operation, source });
+    }
 
     if (error) {
         throw new CustomError({
-            message:error.message || error.response.data?.message || "Error en el servidor",
-            code:  error.response?.status || error.code || 500,
-            data: error.data || error.response.data,
+            message: error.message || 'Error en el servidor',
+            code: error.code || 500,
+            source: source || null,
+            data: error.data || null,
         });
     }
 
     throw new CustomError({
-        message: error.message || "Error desconocido",
+        message: 'Error desconocido',
         code: 500,
     });
 };
