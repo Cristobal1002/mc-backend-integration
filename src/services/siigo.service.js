@@ -2,6 +2,7 @@ import axios from "axios";
 import { CustomError, handleServiceError, IntegrationSource } from "../errors/index.js";
 import { DateTime } from "luxon";
 import { model } from "../models/index.js";
+import { executeSiigoRequest } from "./siigo-rate-limit.js";
 
 const SIIGO_BASE_URL = process.env.SIIGO_BASE_URL
 const SIIGO_SERVICES_BASE_URL = 'https://services.siigo.com'
@@ -39,9 +40,10 @@ let inventoryGroupsCacheExpiration = null;
 
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutos
 
-// ======= Caché de productos por código (para impuestos ADV/ICL) =======
+// ======= Caché de productos por código (compartida por todo el flujo) =======
 let productCacheByCode = {};
 let productCacheByCodeExpiration = {};
+const productInflightByCode = {};
 
 const normalizeTaxName = (text) =>
     text?.toString().normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
@@ -51,20 +53,45 @@ const coerceEnvId = (v) => {
     const s = v.toString().trim();
     if (!s) return null;
     const n = Number(s);
-    return Number.isFinite(n) ? n : s; // Siigo suele usar IDs numéricos, pero soportamos string por seguridad
+    return Number.isFinite(n) ? n : s;
+};
+
+/** Petición HTTP a Siigo con cola global y reintentos ante 429. */
+const siigoHttp = async (config, operation) => {
+    return executeSiigoRequest(() => axios(config), { operation });
+};
+
+const fetchItemByCodeFromApi = async (code) => {
+    const options = await getSiigoHeadersOptions();
+    const url = `${SIIGO_BASE_URL}/v1/products?code=${encodeURIComponent(code)}`;
+    const response = await siigoHttp(
+        { method: 'get', url, headers: options.headers },
+        `GET /v1/products?code=${code}`
+    );
+    return response.data;
 };
 
 const getProductByCodeWithCache = async (code) => {
-    const now = Date.now();
     if (!code) return null;
 
-    if (!productCacheByCode[code] || now > (productCacheByCodeExpiration[code] || 0)) {
-        const data = await getItemByCode(code);
-        // getItemByCode retorna response.data (con results)
-        productCacheByCode[code] = data ?? null;
-        productCacheByCodeExpiration[code] = now + CACHE_TTL_MS;
+    const now = Date.now();
+    if (productCacheByCode[code] && now < (productCacheByCodeExpiration[code] || 0)) {
+        return productCacheByCode[code];
     }
-    return productCacheByCode[code];
+
+    if (!productInflightByCode[code]) {
+        productInflightByCode[code] = fetchItemByCodeFromApi(code)
+            .then((data) => {
+                productCacheByCode[code] = data ?? null;
+                productCacheByCodeExpiration[code] = Date.now() + CACHE_TTL_MS;
+                return productCacheByCode[code];
+            })
+            .finally(() => {
+                delete productInflightByCode[code];
+            });
+    }
+
+    return productInflightByCode[code];
 };
 
 // ======= Helpers de caché =======
@@ -141,7 +168,10 @@ export const getSiigoToken = async () => {
     tokenPromise = new Promise(async (resolve, reject) => {
         try {
             const url = `${SIIGO_BASE_URL}/auth`;
-            const response = await axios.post(url, { username: SIIGO_USER, access_key: SIIGO_TOKEN });
+            const response = await executeSiigoRequest(
+                () => axios.post(url, { username: SIIGO_USER, access_key: SIIGO_TOKEN }),
+                { operation: 'POST /auth' }
+            );
 
             if (!response.data.access_token) {
                 throw new CustomError({
@@ -162,7 +192,10 @@ export const getSiigoToken = async () => {
             //console.log('Token de Siigo guardado en memoria');
             resolve(cachedSiigoToken);
         } catch (error) {
-            invalidateSiigoToken();
+            const status = error?.response?.status;
+            if (status === 401 || status === 403) {
+                invalidateSiigoToken();
+            }
             console.error('Error obteniendo el token de Siigo:', error.message);
             reject(error);
         } finally {
@@ -223,7 +256,10 @@ const querySiigoContact = async (identification) => {
         const options = await getSiigoHeadersOptions();
         const url = `${SIIGO_BASE_URL}/v1/customers?identification=${identification}`;
         ////console.log('Consultando URL:', url);
-        const response = await axios.get(url, options);
+        const response = await siigoHttp(
+            { method: 'get', url, headers: options.headers },
+            `GET /v1/customers?identification=${identification}`
+        );
         return response.data.results.length > 0 ? response.data : null;
     } catch (error) {
         if (error.response?.status === 404) {
@@ -235,15 +271,13 @@ const querySiigoContact = async (identification) => {
 //"code": "MPP13"
 export const getItemByCode = async (code) => {
     try {
-        //console.log('HET ITEM BY CODE', code)
-        const options = await getSiigoHeadersOptions()
-        const url = `${SIIGO_BASE_URL}/v1/products?code=${code}`
-        const response = await axios.get(url, options)
-        //console.log('Get item by code', response.data )
-        return response.data
+        return await getProductByCodeWithCache(code);
     } catch (error) {
-        console.error(error)
-        handleServiceError(error)
+        console.error(`[Siigo] getItemByCode(${code}):`, error?.message || error);
+        handleServiceError(error, {
+            operation: `GET /v1/products?code=${code}`,
+            source: IntegrationSource.SIIGO,
+        });
     }
 }
 
@@ -443,7 +477,10 @@ export const getTaxesByName = async (hioposTaxes) => {
 const getTaxes = async () => {
     try {
         const options = await getSiigoHeadersOptions()
-        const response = await axios.get(`${SIIGO_BASE_URL}/v1/taxes`, options)
+        const response = await siigoHttp(
+            { method: 'get', url: `${SIIGO_BASE_URL}/v1/taxes`, headers: options.headers },
+            'GET /v1/taxes'
+        );
         return response.data
     } catch (error) {
         //console.log('Error en consulta de impuestos:', error)
@@ -455,10 +492,13 @@ export const createPurchaseInvoice = async (data) => {
     try {
         const options = await getSiigoHeadersOptions()
         const url = `${SIIGO_BASE_URL}/v1/purchases`
-        const response = await axios.post(url, data, options)
+        const response = await siigoHttp(
+            { method: 'post', url, data, headers: options.headers },
+            'POST /v1/purchases'
+        );
         return response.data
     } catch (error) {
-        handleServiceError(error)
+        handleServiceError(error, { operation: 'POST /v1/purchases', source: IntegrationSource.SIIGO })
     }
 }
 
@@ -466,7 +506,10 @@ export const createSaleInvoice = async (data) => {
     try {
         const options = await getSiigoHeadersOptions()
         const url = `${SIIGO_BASE_URL}/v1/invoices`
-        const response = await axios.post(url, data, options)
+        const response = await siigoHttp(
+            { method: 'post', url, data, headers: options.headers },
+            'POST /v1/invoices'
+        );
         return response.data
     } catch (error) {
         handleServiceError(error)
@@ -478,7 +521,10 @@ export const createSiigoItem = async (item) => {
         const data = await setItemCreationData(item);
         //console.log('Data armada para crear Articulo:', JSON.stringify(data) );
 
-        const response = await axios.post(`${SIIGO_BASE_URL}/v1/products`, data, options);
+        const response = await siigoHttp(
+            { method: 'post', url: `${SIIGO_BASE_URL}/v1/products`, data, headers: options.headers },
+            'POST /v1/products'
+        );
         return response.data
     } catch (error) {
         // Si ocurre un error, devolver el estado 'error' y el mensaje de error
@@ -491,7 +537,10 @@ const getInvetoryGroups = async () => {
     try {
         const options = await getSiigoHeadersOptions()
         const url = `${SIIGO_BASE_URL}/v1/account-groups`
-        const response = await axios.get(url, options)
+        const response = await siigoHttp(
+            { method: 'get', url, headers: options.headers },
+            'GET /v1/account-groups'
+        );
         return response.data
     } catch (error) {
         handleServiceError(error)
@@ -643,11 +692,17 @@ export const createContact = async (type, contact) => {
     try {
         if (type === '/vendors') {
             const data = setVendorContactData(contact)
-            const supplier = await axios.post(url, data, options)
+            const supplier = await siigoHttp(
+                { method: 'post', url, data, headers: options.headers },
+                'POST /v1/customers (vendor)'
+            );
             return supplier.data
         } else if (type === '/customers') {
             const data = setCustomerContactData(contact);
-            const customer = await axios.post(url, data, options);
+            const customer = await siigoHttp(
+                { method: 'post', url, data, headers: options.headers },
+                'POST /v1/customers (customer)'
+            );
             return customer.data
         }
     } catch (error) {
@@ -660,7 +715,10 @@ const getSiigoPaymentMethods = async (documentType) => {
     const options = await getSiigoHeadersOptions()
     const url = `${SIIGO_BASE_URL}/v1/payment-types?document_type=${documentType}`
     try {
-        const response = await axios.get(url, options)
+        const response = await siigoHttp(
+            { method: 'get', url, headers: options.headers },
+            `GET /v1/payment-types?document_type=${documentType}`
+        );
         return { type: documentType, payments: response.data }
     } catch (error) {
         handleServiceError(error)
@@ -698,7 +756,10 @@ const getDocumentIdByType = async (documentType) => {
     try {
         const options = await getSiigoHeadersOptions()
         const url = `${SIIGO_BASE_URL}/v1/document-types?type=${documentType}`
-        const response = await axios.get(url, options)
+        const response = await siigoHttp(
+            { method: 'get', url, headers: options.headers },
+            `GET /v1/document-types?type=${documentType}`
+        );
         return { type: documentType, documents: response.data }
     } catch (error) {
         handleServiceError(error)
@@ -729,7 +790,10 @@ const getCostCenters = async () => {
     try {
         const options = await getSiigoHeadersOptions();
         const url = `${SIIGO_BASE_URL}/v1/cost-centers`
-        const response = await axios.get(url, options)
+        const response = await siigoHttp(
+            { method: 'get', url, headers: options.headers },
+            'GET /v1/cost-centers'
+        );
         return response.data
     } catch (error) {
         handleServiceError(error)
@@ -834,7 +898,15 @@ export const matchCostCenter = async (hioposCostCenter) => {
 };*/
 
 
-export const setItemDataForInvoice = async (item, type) => {
+const detectAdvIclFromHioposTaxes = (tributaries) => {
+    const names = tributaries.map((t) => normalizeTaxName(t?.Nombre_Impuesto));
+    return {
+        hasADV: names.includes('adv'),
+        hasICL: names.includes('icl'),
+    };
+};
+
+export const setItemDataForInvoice = async (item, type, { siigoProduct = null } = {}) => {
   try {
     // ===== Helpers =====
     const isNonEmptyObj = (o) => o && typeof o === 'object' && Object.keys(o).length > 0;
@@ -958,21 +1030,33 @@ export const setItemDataForInvoice = async (item, type) => {
       ? await getTaxesByName(allTributaries) // ← tu resolutor por nombre + % a IDs de Siigo
       : [];
 
-    // ===== 6.1) Compras: Si el artículo en Siigo tiene ADV o ICL, forzar impuesto fijo por ENV =====
+    // ===== 6.1) Compras: ADV/ICL → un solo impuesto fijo (id desde ENV) =====
     if (type === 'purchases') {
       const code = item.Ref_Articulo ?? item.Referencia ?? item.Cod_Barra ?? item.Cod_Articulo;
       const advEnvId = coerceEnvId(process.env.SIIGO_ADV_TAX_ID);
       const iclEnvId = coerceEnvId(process.env.SIIGO_ICL_TAX_ID);
-      const anyFixedEnvId = coerceEnvId(process.env.SIIGO_FIXED_TAX_ID); // fallback opcional
+      const anyFixedEnvId = coerceEnvId(process.env.SIIGO_FIXED_TAX_ID);
 
-      // Solo vale la pena consultar si hay configuración disponible
       if (code && (advEnvId || iclEnvId || anyFixedEnvId)) {
-        const productData = await getProductByCodeWithCache(code);
-        const product = productData?.results?.[0];
-        const productTaxes = Array.isArray(product?.taxes) ? product.taxes : [];
+        let hasADV = false;
+        let hasICL = false;
 
-        const hasADV = productTaxes.some(t => normalizeTaxName(t?.name) === 'adv');
-        const hasICL = productTaxes.some(t => normalizeTaxName(t?.name) === 'icl');
+        if (siigoProduct?.taxes) {
+          const productTaxes = siigoProduct.taxes;
+          hasADV = productTaxes.some((t) => normalizeTaxName(t?.name) === 'adv');
+          hasICL = productTaxes.some((t) => normalizeTaxName(t?.name) === 'icl');
+        } else {
+          const fromHiopos = detectAdvIclFromHioposTaxes(allTributaries);
+          if (fromHiopos.hasADV || fromHiopos.hasICL) {
+            hasADV = fromHiopos.hasADV;
+            hasICL = fromHiopos.hasICL;
+          } else {
+            const product = (await getProductByCodeWithCache(code))?.results?.[0];
+            const productTaxes = Array.isArray(product?.taxes) ? product.taxes : [];
+            hasADV = productTaxes.some((t) => normalizeTaxName(t?.name) === 'adv');
+            hasICL = productTaxes.some((t) => normalizeTaxName(t?.name) === 'icl');
+          }
+        }
 
         if (hasADV || hasICL) {
           const fixedId =

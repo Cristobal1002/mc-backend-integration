@@ -33,6 +33,13 @@ const buildAuthMessage = (source, operation) => {
     return `Error de autenticación en integración externa (${operation}).`;
 };
 
+const buildRateLimitMessage = (source, operation) => {
+    if (source === IntegrationSource.SIIGO) {
+        return `Siigo: límite de peticiones excedido (429) en "${operation}". Se reintentó automáticamente sin éxito; reduzca la concurrencia o espere unos minutos.`;
+    }
+    return `Límite de peticiones excedido (429) en "${operation}".`;
+};
+
 const buildGenericMessage = (source, operation, upstreamStatus) => {
     const statusLabel = upstreamStatus ? `HTTP ${upstreamStatus}` : 'sin código HTTP';
     if (source === IntegrationSource.HIOPOS) {
@@ -61,6 +68,7 @@ export const buildIntegrationError = ({
     const resolvedSource = source || detectSourceFromRequest(error) || defaultSource;
     const upstreamStatus = error?.response?.status ?? error?.code ?? null;
     const isAuthError = upstreamStatus === 401 || upstreamStatus === 403;
+    const isRateLimit = upstreamStatus === 429;
 
     const upstreamMessage =
         error?.response?.data?.message ||
@@ -72,10 +80,14 @@ export const buildIntegrationError = ({
 
     const message = isAuthError
         ? buildAuthMessage(resolvedSource, operation)
-        : buildGenericMessage(resolvedSource, operation, upstreamStatus);
+        : isRateLimit
+            ? buildRateLimitMessage(resolvedSource, operation)
+            : buildGenericMessage(resolvedSource, operation, upstreamStatus);
 
-    // 502 = fallo de servicio externo; no usar 401 para no confundir con JWT del frontend
-    const httpCode = isAuthError ? 502 : (upstreamStatus && upstreamStatus >= 400 && upstreamStatus < 600 ? upstreamStatus : 500);
+    // 502 = fallo de auth upstream; 429 se conserva para identificar rate limit
+    const httpCode = isAuthError
+        ? 502
+        : (upstreamStatus && upstreamStatus >= 400 && upstreamStatus < 600 ? upstreamStatus : 500);
 
     return new CustomError({
         message,
@@ -86,7 +98,7 @@ export const buildIntegrationError = ({
             operation,
             upstreamStatus,
             upstreamMessage,
-            retryable: isAuthError,
+            retryable: isAuthError || isRateLimit,
         },
     });
 };

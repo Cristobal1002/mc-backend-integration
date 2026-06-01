@@ -413,7 +413,7 @@ export const purchaseValidator = async (data = null) => {
         await resetTransactionState(ids);
 
         const batchSize = 25;
-        const rateLimitDelay = 1500;
+        const rateLimitDelay = Number(process.env.SIIGO_VALIDATOR_DELAY_MS) || 1500;
         const batches = [];
 
         for (let i = 0; i < validationInfo.length; i += batchSize) {
@@ -521,6 +521,7 @@ export const purchaseValidator = async (data = null) => {
                     }
 
                     const itemsValidationResults = [];
+                    const productsByCode = new Map();
 
                     for (const item of Detalle_Documento) {
                         const siigoItem = await siigoService.getItemByCode(item.Ref_Articulo);
@@ -540,6 +541,7 @@ export const purchaseValidator = async (data = null) => {
                                 });
                             }
                         } else {
+                            productsByCode.set(item.Ref_Articulo, siigoItem.results[0]);
                             itemsValidationResults.push({
                                 item: item.Ref_Articulo,
                                 status: 'success',
@@ -562,7 +564,12 @@ export const purchaseValidator = async (data = null) => {
 
                     if (itemsStatus === 'success') {
                         for (const item of Detalle_Documento) {
-                            const itemResult = await siigoService.setItemDataForInvoice(item, currentInvoice.type);
+                            const siigoProduct = productsByCode.get(item.Ref_Articulo) ?? null;
+                            const itemResult = await siigoService.setItemDataForInvoice(
+                                item,
+                                currentInvoice.type,
+                                { siigoProduct }
+                            );
                             if (!itemResult) continue;
 
                             if (itemResult.taxes.some(tax => tax.status === 'not_found')) {
@@ -695,7 +702,7 @@ const purchaseInvoiceSync = async (data = null) => {
         const invoices = (data && data.length > 0)
             ? data
             : await getInvoicesToCreation('purchases');
-        const rateLimitDelay = 500; // Delay entre peticiones
+        const rateLimitDelay = Number(process.env.SIIGO_INVOICE_SYNC_DELAY_MS) || 800;
 
         for (const invoice of invoices) {
             //console.log('Factura para enviar de compras:', invoice.siigo_body)
@@ -735,7 +742,7 @@ export const salesValidator = async (data = null) => {
         await resetTransactionState(ids);
 
         const batchSize = 25;
-        const rateLimitDelay = 900;
+        const rateLimitDelay = Number(process.env.SIIGO_VALIDATOR_DELAY_MS) || 1200;
 
         // ===== Helpers globales (evitan redefinir dentro de bucles) =====
         const delay = (ms) => new Promise(res => setTimeout(res, ms)); // por si no existiera en el scope
@@ -1244,7 +1251,7 @@ export const salesValidator = async (data = null) => {
 const saleInvoiceSync = async (data = null) => {
     try {
         const invoices = data || await getInvoicesToCreation('sales');
-        const rateLimitDelay = 500; // Delay entre peticiones
+        const rateLimitDelay = Number(process.env.SIIGO_INVOICE_SYNC_DELAY_MS) || 800;
 
         for (const invoice of invoices) {
             try {
