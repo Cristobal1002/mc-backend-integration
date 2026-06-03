@@ -3,6 +3,7 @@ import { model } from "../models/index.js";
 import { DateTime } from "luxon";
 import { Op } from 'sequelize';
 import { createSaleInvoice, getTaxesByName, setItemDataForInvoice } from "./siigo.service.js";
+import { serializeErrorForDb, buildValidationErrorSummary } from "../utils/error-serializer.utils.js";
 
 export const getHioposLote = async (type, filter, isManual = false, runSync = false, jobId = null) => {
     let lote;
@@ -677,6 +678,9 @@ export const purchaseValidator = async (data = null) => {
                     const allSuccess = validationFields.every(field => endValidation[field] === 'success');
                     endValidation.siigo_body = invoiceData;
                     endValidation.status = allSuccess ? 'to-invoice' : 'failed';
+                    if (!allSuccess) {
+                        endValidation.error = buildValidationErrorSummary(endValidation);
+                    }
                     await endValidation.save();
 
                     await delay(rateLimitDelay);
@@ -684,7 +688,7 @@ export const purchaseValidator = async (data = null) => {
                 } catch (validationError) {
                     console.error(`Error procesando factura de compra ID: ${currentInvoice.id}`, validationError);
                     await model.TransactionModel.update({
-                        error: validationError.message,
+                        error: serializeErrorForDb(validationError),
                         status: 'failed',
                     }, { where: { id: currentInvoice.id } });
                 }
@@ -715,7 +719,10 @@ const purchaseInvoiceSync = async (data = null) => {
                 await delay(rateLimitDelay);
             } catch (errorInvoice) {
                 console.error('Error al crear la factura', errorInvoice);
-                await model.TransactionModel.update({ status: 'failed', error: errorInvoice.data }, { where: { id: invoice.id } });
+                await model.TransactionModel.update(
+                    { status: 'failed', error: serializeErrorForDb(errorInvoice) },
+                    { where: { id: invoice.id } }
+                );
             }
         }
     } catch (error) {
@@ -1225,6 +1232,9 @@ export const salesValidator = async (data = null) => {
 
                     endValidation.siigo_body = invoiceData;
                     endValidation.status = allSuccessOrDefault ? 'to-invoice' : 'failed';
+                    if (!allSuccessOrDefault) {
+                        endValidation.error = buildValidationErrorSummary(endValidation);
+                    }
 
                     await endValidation.save();
                     await delay(rateLimitDelay);
@@ -1232,7 +1242,7 @@ export const salesValidator = async (data = null) => {
                 } catch (validationError) {
                     console.error(`Error procesando factura de venta ID: ${currentInvoice.id}`, validationError);
                     await model.TransactionModel.update({
-                        error: validationError.message,
+                        error: serializeErrorForDb(validationError),
                         status: 'failed',
                     }, { where: { id: currentInvoice.id } });
                 }
@@ -1263,7 +1273,10 @@ const saleInvoiceSync = async (data = null) => {
                 await delay(rateLimitDelay);
             } catch (errorInvoice) {
                 console.error('Error al crear la factura', errorInvoice);
-                await model.TransactionModel.update({ status: 'failed', error: errorInvoice.data }, { where: { id: invoice.id } });
+                await model.TransactionModel.update(
+                    { status: 'failed', error: serializeErrorForDb(errorInvoice) },
+                    { where: { id: invoice.id } }
+                );
             }
         }
     } catch (error) {
@@ -1418,7 +1431,7 @@ export const updateTransaction = async (id, data) => {
             console.error('Error al crear la factura:', errorInvoice?.data || errorInvoice);
 
             await model.TransactionModel.update(
-                { status: 'failed', error: errorInvoice?.data || errorInvoice },
+                { status: 'failed', error: serializeErrorForDb(errorInvoice) },
                 { where: { id } }
             );
         }

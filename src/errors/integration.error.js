@@ -73,10 +73,13 @@ export const buildIntegrationError = ({
     const upstreamMessage =
         error?.response?.data?.message ||
         error?.response?.data?.Errors?.[0]?.Message ||
+        error?.response?.data?.errors?.[0]?.message ||
         error?.response?.data?.error ||
         (typeof error?.response?.data === 'string' ? error.response.data : null) ||
         error?.message ||
         null;
+
+    const upstreamResponse = error?.response?.data ?? null;
 
     const message = isAuthError
         ? buildAuthMessage(resolvedSource, operation)
@@ -98,6 +101,7 @@ export const buildIntegrationError = ({
             operation,
             upstreamStatus,
             upstreamMessage,
+            upstreamResponse,
             retryable: isAuthError || isRateLimit,
         },
     });

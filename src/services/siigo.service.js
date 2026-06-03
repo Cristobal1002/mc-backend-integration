@@ -512,7 +512,7 @@ export const createSaleInvoice = async (data) => {
         );
         return response.data
     } catch (error) {
-        handleServiceError(error)
+        handleServiceError(error, { operation: 'POST /v1/invoices', source: IntegrationSource.SIIGO })
     }
 }
 export const createSiigoItem = async (item) => {
